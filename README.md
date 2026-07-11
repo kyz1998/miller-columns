@@ -7,6 +7,7 @@ An Obsidian plugin that turns vault structure into cascading pages. Pages can co
 - **Cascading pages** — the vault root is the first column; clicking a page with subpages opens its children in a new column to the right.
 - **Unified pages** — selecting a page with children creates/opens `Page/Page.md`, so pages and notes behave as one concept.
 - **Automatic child links** — each parent page keeps a managed block of direct child page titles, linked without embedding their contents.
+- **Custom appearance** — right-click a page to choose a Lucide icon and color for the column row.
 - **Adjustable columns** — drag a column's right edge to resize that column depth, or set the default width from plugin settings.
 - **Page operations** — right-click any item (or a column's empty space) for New page, Rename, and Delete (respects your trash setting). The header button creates a page in the deepest selected page.
 - **Drag & drop** — drop an item onto any page with subpages (or column background) to move it.

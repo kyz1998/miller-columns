@@ -33,7 +33,11 @@ const MAX_COLUMN_WIDTH = 520;
 const DEFAULT_SETTINGS: MillerColumnsSettings = {
 	columnWidth: 220,
 	columnWidths: [],
+	appearances: {},
 };
+const DEFAULT_PAGE_ICON = "file-text";
+const ICON_PRESETS = ["file-text", "book-open", "notebook", "library", "folder", "star", "bookmark", "lightbulb", "pen-line"];
+const COLOR_PRESETS = ["", "#e06c75", "#d19a66", "#e5c07b", "#98c379", "#56b6c2", "#61afef", "#c678dd"];
 
 function compareNames(a: TAbstractFile, b: TAbstractFile): number {
 	return a.name.localeCompare(b.name, undefined, {
@@ -67,6 +71,12 @@ interface Column {
 interface MillerColumnsSettings {
 	columnWidth: number;
 	columnWidths: Array<number | null>;
+	appearances: Record<string, PageAppearance>;
+}
+
+interface PageAppearance {
+	icon?: string;
+	color?: string;
 }
 
 class MillerColumnsView extends ItemView {
@@ -119,7 +129,10 @@ class MillerColumnsView extends ItemView {
 			this.app.vault.on("delete", (f) => this.queueRefresh(this.parentsOf(f.path)))
 		);
 		this.registerEvent(
-			this.app.vault.on("rename", () => this.queueRefresh([REFRESH_ALL]))
+			this.app.vault.on("rename", (file, oldPath) => {
+				void this.plugin.moveAppearance(oldPath, file.path);
+				this.queueRefresh([REFRESH_ALL]);
+			})
 		);
 
 		this.buildColumnsFrom(0);
@@ -260,7 +273,9 @@ class MillerColumnsView extends ItemView {
 		row.setAttr("draggable", "true");
 
 		const iconEl = row.createSpan({ cls: "mc-icon" });
-		setIcon(iconEl, "file-text");
+		const appearance = this.plugin.appearanceFor(item.path);
+		setIcon(iconEl, appearance.icon ?? DEFAULT_PAGE_ICON);
+		if (appearance.color) iconEl.style.color = appearance.color;
 
 		const displayName =
 			item instanceof TFile && item.extension === "md" ? item.basename : item.name;
@@ -612,6 +627,13 @@ class MillerColumnsView extends ItemView {
 		);
 		menu.addSeparator();
 		menu.addItem((mi) =>
+			mi
+				.setTitle("Icon and color")
+				.setIcon("palette")
+				.onClick(() => new AppearanceModal(this.app, this.plugin, item, () => this.refreshPath(item)).open())
+		);
+		menu.addSeparator();
+		menu.addItem((mi) =>
 			mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
 		);
 		menu.addSeparator();
@@ -625,6 +647,11 @@ class MillerColumnsView extends ItemView {
 			})
 		);
 		menu.showAtMouseEvent(e);
+	}
+
+	private refreshPath(item: TAbstractFile): void {
+		const parent = item.parent ?? this.app.vault.getRoot();
+		this.queueRefresh([parent.path]);
 	}
 
 	private showFolderMenu(e: MouseEvent, folder: TFolder): void {
@@ -770,6 +797,116 @@ class RenameModal extends Modal {
 	}
 }
 
+class AppearanceModal extends Modal {
+	private icon = "";
+	private color = "";
+	private previewEl: HTMLElement;
+
+	constructor(
+		app: App,
+		private readonly plugin: MillerColumnsPlugin,
+		private readonly item: TAbstractFile,
+		private readonly onChange: () => void
+	) {
+		super(app);
+		const appearance = plugin.appearanceFor(item.path);
+		this.icon = appearance.icon ?? DEFAULT_PAGE_ICON;
+		this.color = appearance.color ?? "";
+	}
+
+	onOpen(): void {
+		this.titleEl.setText("Icon and color");
+		this.contentEl.addClass("mc-appearance-modal");
+
+		const preview = this.contentEl.createDiv({ cls: "mc-appearance-preview" });
+		this.previewEl = preview.createSpan({ cls: "mc-appearance-preview-icon" });
+		preview.createSpan({ text: this.item.name });
+		this.renderPreview();
+
+		new Setting(this.contentEl)
+			.setName("Icon")
+			.setDesc("Use a Lucide icon name, such as notebook, book-open, star, or bookmark.")
+			.addText((text) =>
+				text.setValue(this.icon).onChange((value) => {
+					this.icon = value.trim();
+					this.renderPreview();
+				})
+			);
+
+		const iconGrid = this.contentEl.createDiv({ cls: "mc-picker-grid" });
+		for (const icon of ICON_PRESETS) {
+			const btn = iconGrid.createEl("button", { cls: "mc-icon-choice", attr: { type: "button" } });
+			const iconEl = btn.createSpan();
+			setIcon(iconEl, icon);
+			btn.setAttr("aria-label", icon);
+			btn.addEventListener("click", () => {
+				this.icon = icon;
+				this.display();
+			});
+		}
+
+		new Setting(this.contentEl)
+			.setName("Color")
+			.setDesc("Choose a preset or enter any CSS color.")
+			.addText((text) =>
+				text.setPlaceholder("default, #61afef, var(--text-accent)")
+					.setValue(this.color)
+					.onChange((value) => {
+						this.color = value.trim();
+						this.renderPreview();
+					})
+			);
+
+		const colorGrid = this.contentEl.createDiv({ cls: "mc-picker-grid" });
+		for (const color of COLOR_PRESETS) {
+			const btn = colorGrid.createEl("button", { cls: "mc-color-choice", attr: { type: "button" } });
+			btn.setAttr("aria-label", color || "Default color");
+			if (color) btn.style.backgroundColor = color;
+			btn.addEventListener("click", () => {
+				this.color = color;
+				this.display();
+			});
+		}
+
+		new Setting(this.contentEl)
+			.addButton((btn) =>
+				btn.setButtonText("Reset").onClick(async () => {
+					delete this.plugin.settings.appearances[this.item.path];
+					await this.plugin.saveSettings();
+					this.onChange();
+					this.close();
+				})
+			)
+			.addButton((btn) =>
+				btn.setButtonText("Save").setCta().onClick(async () => {
+					this.plugin.setAppearance(this.item.path, {
+						icon: this.icon || DEFAULT_PAGE_ICON,
+						color: this.color || undefined,
+					});
+					await this.plugin.saveSettings();
+					this.onChange();
+					this.close();
+				})
+			);
+	}
+
+	private display(): void {
+		this.contentEl.empty();
+		this.onOpen();
+	}
+
+	private renderPreview(): void {
+		if (!this.previewEl) return;
+		this.previewEl.empty();
+		setIcon(this.previewEl, this.icon || DEFAULT_PAGE_ICON);
+		this.previewEl.style.color = this.color;
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
 export default class MillerColumnsPlugin extends Plugin {
 	settings: MillerColumnsSettings;
 
@@ -792,6 +929,7 @@ export default class MillerColumnsPlugin extends Plugin {
 			...DEFAULT_SETTINGS,
 			...loaded,
 			columnWidths: Array.isArray(loaded?.columnWidths) ? loaded.columnWidths : [],
+			appearances: loaded?.appearances && typeof loaded.appearances === "object" ? loaded.appearances : {},
 		};
 		this.settings.columnWidth = this.clampColumnWidth(this.settings.columnWidth);
 		this.settings.columnWidths = this.settings.columnWidths.map((width) =>
@@ -820,6 +958,32 @@ export default class MillerColumnsPlugin extends Plugin {
 
 	resetColumnWidth(index: number): void {
 		this.settings.columnWidths[index] = null;
+	}
+
+	appearanceFor(path: string): PageAppearance {
+		return this.settings.appearances[path] ?? {};
+	}
+
+	setAppearance(path: string, appearance: PageAppearance): void {
+		this.settings.appearances[path] = appearance;
+	}
+
+	async moveAppearance(oldPath: string, newPath: string): Promise<void> {
+		let changed = false;
+		const next: Record<string, PageAppearance> = {};
+		for (const [path, appearance] of Object.entries(this.settings.appearances)) {
+			let targetPath = path;
+			if (path === oldPath) {
+				targetPath = newPath;
+			} else if (path.startsWith(oldPath + "/")) {
+				targetPath = newPath + path.substring(oldPath.length);
+			}
+			if (targetPath !== path) changed = true;
+			next[targetPath] = appearance;
+		}
+		if (!changed) return;
+		this.settings.appearances = next;
+		await this.saveSettings();
 	}
 
 	private clampColumnWidth(width: number): number {
