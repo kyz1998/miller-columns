@@ -515,7 +515,7 @@ class MillerColumnsView extends ItemView {
 			new Notice(`Could not create page because ${path} already exists.`);
 			return null;
 		}
-		return await this.app.vault.create(path, `# ${folder.name}\n\n${this.subpageBlock(folder)}`);
+		return await this.app.vault.create(path, this.subpageBlock(folder));
 	}
 
 	private async syncFolderPage(folder: TFolder, knownPage?: TFile | null): Promise<void> {
@@ -524,9 +524,10 @@ class MillerColumnsView extends ItemView {
 			const page = knownPage ?? (await this.ensureFolderPage(folder));
 			if (!page) return;
 			const block = this.subpageBlock(folder);
-			const current = await this.app.vault.read(page);
+			const raw = await this.app.vault.read(page);
+			const current = this.stripGeneratedTitle(raw, folder);
 			const next = this.replaceSubpageBlock(current, block);
-			if (next !== current) await this.app.vault.modify(page, next);
+			if (next !== raw) await this.app.vault.modify(page, next);
 		} catch (e) {
 			new Notice("Could not update subpage links: " + errorMessage(e));
 		}
@@ -562,6 +563,18 @@ class MillerColumnsView extends ItemView {
 		}
 		const trimmed = content.trimEnd();
 		return `${trimmed}${trimmed ? "\n\n" : ""}${block}`;
+	}
+
+	private stripGeneratedTitle(content: string, folder: TFolder): string {
+		const heading = `# ${folder.name}`;
+		const trimmedStart = content.trimStart();
+		if (trimmedStart !== heading && !trimmedStart.startsWith(`${heading}\n`)) return content;
+		const leadingWhitespaceLength = content.length - trimmedStart.length;
+		const afterHeading = trimmedStart.substring(heading.length);
+		if (!/^\s*\n\s*\n?<!-- miller-columns-subpages:start -->/.test(afterHeading)) {
+			return content;
+		}
+		return content.substring(0, leadingWhitespaceLength) + afterHeading.trimStart();
 	}
 
 	// ---------------------------------------------------------- file actions

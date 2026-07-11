@@ -457,9 +457,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       new import_obsidian.Notice(`Could not create page because ${path} already exists.`);
       return null;
     }
-    return await this.app.vault.create(path, `# ${folder.name}
-
-${this.subpageBlock(folder)}`);
+    return await this.app.vault.create(path, this.subpageBlock(folder));
   }
   async syncFolderPage(folder, knownPage) {
     if (folder.isRoot()) return;
@@ -467,9 +465,10 @@ ${this.subpageBlock(folder)}`);
       const page = knownPage != null ? knownPage : await this.ensureFolderPage(folder);
       if (!page) return;
       const block = this.subpageBlock(folder);
-      const current = await this.app.vault.read(page);
+      const raw = await this.app.vault.read(page);
+      const current = this.stripGeneratedTitle(raw, folder);
       const next = this.replaceSubpageBlock(current, block);
-      if (next !== current) await this.app.vault.modify(page, next);
+      if (next !== raw) await this.app.vault.modify(page, next);
     } catch (e) {
       new import_obsidian.Notice("Could not update subpage links: " + errorMessage(e));
     }
@@ -504,6 +503,18 @@ ${body}${SUBPAGE_BLOCK_END}`;
     }
     const trimmed = content.trimEnd();
     return `${trimmed}${trimmed ? "\n\n" : ""}${block}`;
+  }
+  stripGeneratedTitle(content, folder) {
+    const heading = `# ${folder.name}`;
+    const trimmedStart = content.trimStart();
+    if (trimmedStart !== heading && !trimmedStart.startsWith(`${heading}
+`)) return content;
+    const leadingWhitespaceLength = content.length - trimmedStart.length;
+    const afterHeading = trimmedStart.substring(heading.length);
+    if (!/^\s*\n\s*\n?<!-- miller-columns-subpages:start -->/.test(afterHeading)) {
+      return content;
+    }
+    return content.substring(0, leadingWhitespaceLength) + afterHeading.trimStart();
   }
   // ---------------------------------------------------------- file actions
   makeHeaderButton(parent, icon, label, onClick) {
