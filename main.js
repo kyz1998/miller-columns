@@ -57,6 +57,9 @@ function errorMessage(e) {
 function markdownLinkPath(file) {
   return file.path.replace(/\.md$/i, "");
 }
+function markdownPageLink(file) {
+  return `[[${markdownLinkPath(file)}|${file.basename}]]`;
+}
 var MillerColumnsView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -89,12 +92,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       "file-plus",
       "New page",
       () => this.createPage(this.deepestSelectedFolder())
-    );
-    this.makeHeaderButton(
-      header,
-      "file-plus-2",
-      "New note",
-      () => this.createNote(this.deepestSelectedFolder())
     );
     this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
     this.columnsEl.setAttr("tabindex", "0");
@@ -438,7 +435,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const existing = this.app.vault.getAbstractFileByPath(path);
     if (existing instanceof import_obsidian.TFile) return existing;
     if (existing) {
-      new import_obsidian.Notice(`Could not create page note because ${path} already exists.`);
+      new import_obsidian.Notice(`Could not create page because ${path} already exists.`);
       return null;
     }
     return await this.app.vault.create(path, `# ${folder.name}
@@ -455,17 +452,15 @@ ${this.subpageBlock(folder)}`);
       const next = this.replaceSubpageBlock(current, block);
       if (next !== current) await this.app.vault.modify(page, next);
     } catch (e) {
-      new import_obsidian.Notice("Could not update subpage embeds: " + errorMessage(e));
+      new import_obsidian.Notice("Could not update subpage links: " + errorMessage(e));
     }
   }
   subpageBlock(folder) {
-    const embeds = this.subpageFiles(folder).map((file) => `![[${markdownLinkPath(file)}]]`);
-    const body = embeds.length > 0 ? embeds.join("\n\n") : "_No subpages yet._";
+    const links = this.subpageFiles(folder).map((file) => `- ${markdownPageLink(file)}`);
+    const body = links.length > 0 ? `${links.join("\n")}
+` : "";
     return `${SUBPAGE_BLOCK_START}
-## Subpages
-
-${body}
-${SUBPAGE_BLOCK_END}`;
+${body}${SUBPAGE_BLOCK_END}`;
   }
   subpageFiles(folder) {
     const files = [];
@@ -506,9 +501,6 @@ ${SUBPAGE_BLOCK_END}`;
     menu.addItem(
       (mi) => mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(targetFolder))
     );
-    menu.addItem(
-      (mi) => mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(targetFolder))
-    );
     menu.addSeparator();
     menu.addItem(
       (mi) => mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
@@ -530,9 +522,6 @@ ${SUBPAGE_BLOCK_END}`;
     menu.addItem(
       (mi) => mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(folder))
     );
-    menu.addItem(
-      (mi) => mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(folder))
-    );
     menu.showAtMouseEvent(e);
   }
   uniquePath(folder, base, ext) {
@@ -543,17 +532,6 @@ ${SUBPAGE_BLOCK_END}`;
       candidate = `${base} ${n++}`;
     }
     return (0, import_obsidian.normalizePath)(prefix + candidate + ext);
-  }
-  async createNote(folder) {
-    try {
-      const path = this.uniquePath(folder, "Untitled", ".md");
-      const file = await this.app.vault.create(path, "");
-      await this.syncFolderPage(folder);
-      this.revealPath(file);
-      await this.app.workspace.getLeaf(false).openFile(file);
-    } catch (e) {
-      new import_obsidian.Notice("Could not create note: " + errorMessage(e));
-    }
   }
   async createPage(parent) {
     try {
@@ -614,7 +592,7 @@ var RenameModal = class extends import_obsidian.Modal {
     this.item = item;
   }
   onOpen() {
-    this.titleEl.setText(this.item instanceof import_obsidian.TFolder ? "Rename folder" : "Rename file");
+    this.titleEl.setText("Rename page");
     const input = this.contentEl.createEl("input", {
       cls: "mc-rename-input",
       type: "text",

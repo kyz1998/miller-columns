@@ -3,7 +3,7 @@
 	"name": "Miller Columns",
 	"version": "1.0.0",
 	"minAppVersion": "1.4.0",
-	"description": "Browse page folders in cascading columns and automatically embed direct subpages in their notes.",
+	"description": "Browse cascading pages and keep parent pages linked to direct child page titles.",
 	"author": "dl",
 	"isDesktopOnly": false
 }

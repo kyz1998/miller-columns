@@ -55,6 +55,10 @@ function markdownLinkPath(file: TFile): string {
 	return file.path.replace(/\.md$/i, "");
 }
 
+function markdownPageLink(file: TFile): string {
+	return `[[${markdownLinkPath(file)}|${file.basename}]]`;
+}
+
 interface Column {
 	folder: TFolder;
 	el: HTMLElement;
@@ -100,9 +104,6 @@ class MillerColumnsView extends ItemView {
 		const header = contentEl.createDiv({ cls: "mc-header" });
 		this.makeHeaderButton(header, "file-plus", "New page", () =>
 			this.createPage(this.deepestSelectedFolder())
-		);
-		this.makeHeaderButton(header, "file-plus-2", "New note", () =>
-			this.createNote(this.deepestSelectedFolder())
 		);
 
 		this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
@@ -489,7 +490,7 @@ class MillerColumnsView extends ItemView {
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing instanceof TFile) return existing;
 		if (existing) {
-			new Notice(`Could not create page note because ${path} already exists.`);
+			new Notice(`Could not create page because ${path} already exists.`);
 			return null;
 		}
 		return await this.app.vault.create(path, `# ${folder.name}\n\n${this.subpageBlock(folder)}`);
@@ -505,14 +506,14 @@ class MillerColumnsView extends ItemView {
 			const next = this.replaceSubpageBlock(current, block);
 			if (next !== current) await this.app.vault.modify(page, next);
 		} catch (e) {
-			new Notice("Could not update subpage embeds: " + errorMessage(e));
+			new Notice("Could not update subpage links: " + errorMessage(e));
 		}
 	}
 
 	private subpageBlock(folder: TFolder): string {
-		const embeds = this.subpageFiles(folder).map((file) => `![[${markdownLinkPath(file)}]]`);
-		const body = embeds.length > 0 ? embeds.join("\n\n") : "_No subpages yet._";
-		return `${SUBPAGE_BLOCK_START}\n## Subpages\n\n${body}\n${SUBPAGE_BLOCK_END}`;
+		const links = this.subpageFiles(folder).map((file) => `- ${markdownPageLink(file)}`);
+		const body = links.length > 0 ? `${links.join("\n")}\n` : "";
+		return `${SUBPAGE_BLOCK_START}\n${body}${SUBPAGE_BLOCK_END}`;
 	}
 
 	private subpageFiles(folder: TFolder): TFile[] {
@@ -563,9 +564,6 @@ class MillerColumnsView extends ItemView {
 		menu.addItem((mi) =>
 			mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(targetFolder))
 		);
-		menu.addItem((mi) =>
-			mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(targetFolder))
-		);
 		menu.addSeparator();
 		menu.addItem((mi) =>
 			mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
@@ -588,9 +586,6 @@ class MillerColumnsView extends ItemView {
 		menu.addItem((mi) =>
 			mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(folder))
 		);
-		menu.addItem((mi) =>
-			mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(folder))
-		);
 		menu.showAtMouseEvent(e);
 	}
 
@@ -602,18 +597,6 @@ class MillerColumnsView extends ItemView {
 			candidate = `${base} ${n++}`;
 		}
 		return normalizePath(prefix + candidate + ext);
-	}
-
-	private async createNote(folder: TFolder): Promise<void> {
-		try {
-			const path = this.uniquePath(folder, "Untitled", ".md");
-			const file = await this.app.vault.create(path, "");
-			await this.syncFolderPage(folder);
-			this.revealPath(file);
-			await this.app.workspace.getLeaf(false).openFile(file);
-		} catch (e) {
-			new Notice("Could not create note: " + errorMessage(e));
-		}
 	}
 
 	private async createPage(parent: TFolder): Promise<void> {
@@ -678,7 +661,7 @@ class RenameModal extends Modal {
 	}
 
 	onOpen(): void {
-		this.titleEl.setText(this.item instanceof TFolder ? "Rename folder" : "Rename file");
+		this.titleEl.setText("Rename page");
 		const input = this.contentEl.createEl("input", {
 			cls: "mc-rename-input",
 			type: "text",

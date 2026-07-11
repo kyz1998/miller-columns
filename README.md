@@ -1,17 +1,17 @@
 # Miller Columns
 
-An Obsidian plugin that turns vault structure into cascading pages. Folder-backed pages open like notes, and their direct subpages are embedded automatically.
+An Obsidian plugin that turns vault structure into cascading pages. Pages can contain child pages, and each parent page keeps a simple linked list of its direct children.
 
 ## Features
 
 - **Cascading pages** — the vault root is the first column; clicking a page with subpages opens its children in a new column to the right.
-- **Folder-backed page notes** — selecting a page folder creates/opens `Page/Page.md`, so a page can also contain subpages.
-- **Automatic embeds** — each folder-backed page keeps a managed `Subpages` block that embeds its direct markdown subpages.
+- **Unified pages** — selecting a page with children creates/opens `Page/Page.md`, so pages and notes behave as one concept.
+- **Automatic child links** — each parent page keeps a managed block of direct child page titles, linked without embedding their contents.
 - **Adjustable columns** — drag a column's right edge to resize that column depth, or set the default width from plugin settings.
-- **File operations** — right-click any item (or a column's empty space) for New page, New note, Rename, and Delete (respects your trash setting). Header buttons create items in the deepest selected page.
+- **Page operations** — right-click any item (or a column's empty space) for New page, Rename, and Delete (respects your trash setting). The header button creates a page in the deepest selected page.
 - **Drag & drop** — drop an item onto any page with subpages (or column background) to move it.
 - **Live updates** — vault create/delete/rename events refresh only the affected columns and preserve your selection path; externally deleted paths prune back to the deepest valid ancestor.
-- **Keyboard navigation** — Arrow Up/Down move within a column, Right descends into a page, Left returns to the parent column, Enter opens the selected page note.
+- **Keyboard navigation** — Arrow Up/Down move within a column, Right descends into a page, Left returns to the parent column, Enter opens the selected page.
 - **Theme-aware** — styled entirely with Obsidian CSS variables; matches any theme.
 
 ## Development
