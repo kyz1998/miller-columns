@@ -1,0 +1,9 @@
+{
+	"id": "miller-columns",
+	"name": "Miller Columns",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Browse and manage your vault with macOS Finder-style cascading columns instead of a folder tree.",
+	"author": "dl",
+	"isDesktopOnly": false
+}

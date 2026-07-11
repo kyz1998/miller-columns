@@ -1,0 +1,19 @@
+{
+	"name": "miller-columns",
+	"version": "1.0.0",
+	"description": "Obsidian plugin: browse your vault with macOS Finder-style cascading columns.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": ["obsidian", "obsidian-plugin"],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.14.0",
+		"esbuild": "^0.24.0",
+		"obsidian": "latest",
+		"tslib": "^2.6.0",
+		"typescript": "^5.5.0"
+	}
+}

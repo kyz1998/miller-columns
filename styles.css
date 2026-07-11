@@ -1,0 +1,162 @@
+/* Miller Columns — theme-aware styling using only Obsidian CSS variables. */
+
+.miller-columns {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 0;
+	background-color: var(--background-primary);
+	color: var(--text-normal);
+}
+
+/* ------------------------------------------------------------- header bar */
+
+.miller-columns .mc-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+}
+
+.miller-columns .mc-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: var(--font-ui-small, 13px);
+}
+
+.miller-columns .mc-btn-icon {
+	display: inline-flex;
+	align-items: center;
+}
+
+.miller-columns .mc-btn-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* --------------------------------------------------------------- columns */
+
+.miller-columns .mc-columns {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: row;
+	align-items: stretch;
+	overflow-x: auto;
+	overflow-y: hidden;
+	outline: none;
+}
+
+.miller-columns .mc-columns:focus-visible {
+	box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+
+.miller-columns .mc-column {
+	flex: 0 0 220px;
+	width: 220px;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: 4px 0;
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+/* ------------------------------------------------------------------ rows */
+
+.miller-columns .mc-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 8px;
+	cursor: default;
+	color: var(--text-normal);
+	white-space: nowrap;
+	user-select: none;
+}
+
+.miller-columns .mc-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+/* Selected item in an ancestor column: muted highlight. */
+.miller-columns .mc-item.is-selected {
+	background-color: var(--background-modifier-hover);
+}
+
+/* Selected item at the tip of the active path: accent highlight. */
+.miller-columns .mc-item.is-selected.is-active {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.miller-columns .mc-icon {
+	display: inline-flex;
+	align-items: center;
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.miller-columns .mc-icon svg {
+	width: 15px;
+	height: 15px;
+}
+
+.miller-columns .mc-item.is-selected.is-active .mc-icon,
+.miller-columns .mc-item.is-selected.is-active .mc-chevron,
+.miller-columns .mc-item.is-selected.is-active .mc-count {
+	color: var(--text-on-accent);
+}
+
+.miller-columns .mc-name {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: var(--font-ui-small, 13px);
+}
+
+.miller-columns .mc-count {
+	flex: 0 0 auto;
+	font-size: 10px;
+	line-height: 1;
+	padding: 2px 5px;
+	border-radius: 8px;
+	color: var(--text-muted);
+	background-color: var(--background-modifier-hover);
+}
+
+.miller-columns .mc-item.is-selected.is-active .mc-count {
+	background-color: transparent;
+}
+
+.miller-columns .mc-chevron {
+	flex: 0 0 auto;
+	color: var(--text-muted);
+	font-size: 14px;
+	line-height: 1;
+}
+
+/* ----------------------------------------------------------- empty state */
+
+.miller-columns .mc-empty {
+	padding: 16px 12px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller, 12px);
+	text-align: center;
+}
+
+/* ----------------------------------------------------------- drag & drop */
+
+.miller-columns .mc-drop-target {
+	box-shadow: inset 0 0 0 2px var(--interactive-accent);
+	border-radius: 4px;
+}
+
+/* ---------------------------------------------------------- rename modal */
+
+.mc-rename-input {
+	width: 100%;
+	margin-bottom: 12px;
+}
