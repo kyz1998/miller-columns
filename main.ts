@@ -76,6 +76,7 @@ class MillerColumnsView extends ItemView {
 	private columns: Column[] = [];
 	private columnsEl: HTMLElement;
 	private pageLeaf: WorkspaceLeaf | null = null;
+	private previewLeaf: WorkspaceLeaf | null = null;
 	private affected = new Set<string>();
 	private refreshQueued = false;
 
@@ -488,6 +489,9 @@ class MillerColumnsView extends ItemView {
 	private async openPageFile(file: TFile): Promise<void> {
 		const leaf = this.rightPageLeaf();
 		await leaf.openFile(file);
+		const previewLeaf = this.rightPreviewLeaf(leaf);
+		await previewLeaf.openFile(file, { active: false, state: { mode: "preview" } });
+		previewLeaf.setGroupMember(leaf);
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 	}
 
@@ -496,6 +500,13 @@ class MillerColumnsView extends ItemView {
 		this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
 		this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
 		return this.pageLeaf;
+	}
+
+	private rightPreviewLeaf(sourceLeaf: WorkspaceLeaf): WorkspaceLeaf {
+		if (this.previewLeaf && this.isLeafAttached(this.previewLeaf)) return this.previewLeaf;
+		this.app.workspace.setActiveLeaf(sourceLeaf, { focus: false });
+		this.previewLeaf = this.app.workspace.getLeaf("split", "vertical");
+		return this.previewLeaf;
 	}
 
 	private isLeafAttached(target: WorkspaceLeaf): boolean {

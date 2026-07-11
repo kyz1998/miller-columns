@@ -69,6 +69,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.activeColumn = 0;
     this.columns = [];
     this.pageLeaf = null;
+    this.previewLeaf = null;
     this.affected = /* @__PURE__ */ new Set();
     this.refreshQueued = false;
     this.navigation = false;
@@ -433,6 +434,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   async openPageFile(file) {
     const leaf = this.rightPageLeaf();
     await leaf.openFile(file);
+    const previewLeaf = this.rightPreviewLeaf(leaf);
+    await previewLeaf.openFile(file, { active: false, state: { mode: "preview" } });
+    previewLeaf.setGroupMember(leaf);
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
   rightPageLeaf() {
@@ -440,6 +444,12 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
     this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
     return this.pageLeaf;
+  }
+  rightPreviewLeaf(sourceLeaf) {
+    if (this.previewLeaf && this.isLeafAttached(this.previewLeaf)) return this.previewLeaf;
+    this.app.workspace.setActiveLeaf(sourceLeaf, { focus: false });
+    this.previewLeaf = this.app.workspace.getLeaf("split", "vertical");
+    return this.previewLeaf;
   }
   isLeafAttached(target) {
     let found = false;
