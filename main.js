@@ -35,8 +35,11 @@ var ICON_SVG = '<rect x="10" y="18" width="80" height="64" rx="8" fill="none" st
 var REFRESH_ALL = "*";
 var SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 var SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
+var MIN_COLUMN_WIDTH = 160;
+var MAX_COLUMN_WIDTH = 520;
 var DEFAULT_SETTINGS = {
-  columnWidth: 220
+  columnWidth: 220,
+  columnWidths: []
 };
 function compareNames(a, b) {
   return a.name.localeCompare(b.name, void 0, {
@@ -116,6 +119,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       "--mc-column-width",
       `${this.plugin.settings.columnWidth}px`
     );
+    this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
   }
   // ---------------------------------------------------------------- columns
   /** Number of columns implied by the current selection (root + one per selected folder). */
@@ -161,6 +165,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       if (!folder) break;
       const el = this.columnsEl.createDiv({ cls: "mc-column" });
       this.columns.push({ folder, el });
+      this.applyColumnWidth(el, i);
       this.attachColumnHandlers(el, i);
       this.renderColumn(i);
     }
@@ -174,9 +179,52 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const items = this.itemsForColumn(i);
     if (items.length === 0) {
       col.el.createDiv({ cls: "mc-empty", text: "No pages. Right-click to create one." });
+      this.renderResizeHandle(col.el, i);
       return;
     }
     for (const item of items) this.renderRow(col.el, i, item);
+    this.renderResizeHandle(col.el, i);
+  }
+  applyColumnWidth(el, index) {
+    el.style.setProperty("--mc-column-width", `${this.plugin.columnWidthFor(index)}px`);
+  }
+  renderResizeHandle(colEl, colIndex) {
+    const handle = colEl.createDiv({ cls: "mc-resize-handle" });
+    handle.setAttr("aria-label", "Resize column");
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startWidth = this.plugin.columnWidthFor(colIndex);
+      handle.addClass("is-resizing");
+      const onMove = (moveEvent) => {
+        const width = this.plugin.setColumnWidth(
+          colIndex,
+          startWidth + moveEvent.clientX - startX
+        );
+        this.applyColumnWidth(colEl, colIndex);
+        colEl.style.setProperty("--mc-column-width", `${width}px`);
+      };
+      const onUp = () => {
+        handle.removeClass("is-resizing");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        void this.plugin.saveSettings();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+    handle.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    handle.addEventListener("dblclick", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.plugin.resetColumnWidth(colIndex);
+      this.applyColumnWidth(colEl, colIndex);
+      await this.plugin.saveSettings();
+    });
   }
   renderRow(colEl, colIndex, item) {
     const row = colEl.createDiv({ cls: "mc-item" });
@@ -635,7 +683,16 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
     });
   }
   async loadSettings() {
-    this.settings = { ...DEFAULT_SETTINGS, ...await this.loadData() };
+    const loaded = await this.loadData();
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...loaded,
+      columnWidths: Array.isArray(loaded == null ? void 0 : loaded.columnWidths) ? loaded.columnWidths : []
+    };
+    this.settings.columnWidth = this.clampColumnWidth(this.settings.columnWidth);
+    this.settings.columnWidths = this.settings.columnWidths.map(
+      (width) => typeof width === "number" ? this.clampColumnWidth(width) : null
+    );
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -643,6 +700,22 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
       const view = leaf.view;
       if (view instanceof MillerColumnsView) view.applySettings();
     }
+  }
+  columnWidthFor(index) {
+    const width = this.settings.columnWidths[index];
+    return typeof width === "number" ? width : this.settings.columnWidth;
+  }
+  setColumnWidth(index, width) {
+    const next = this.clampColumnWidth(width);
+    this.settings.columnWidths[index] = next;
+    return next;
+  }
+  resetColumnWidth(index) {
+    this.settings.columnWidths[index] = null;
+  }
+  clampColumnWidth(width) {
+    if (!Number.isFinite(width)) return DEFAULT_SETTINGS.columnWidth;
+    return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.round(width)));
   }
   async activateView() {
     var _a;
@@ -663,8 +736,8 @@ var MillerColumnsSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Column width").setDesc("Width of each Miller column in pixels.").addSlider(
-      (slider) => slider.setLimits(160, 420, 10).setValue(this.plugin.settings.columnWidth).setDynamicTooltip().onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Default column width").setDesc("Width in pixels for columns that have not been resized.").addSlider(
+      (slider) => slider.setLimits(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH, 10).setValue(this.plugin.settings.columnWidth).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.columnWidth = value;
         await this.plugin.saveSettings();
       })
@@ -673,6 +746,12 @@ var MillerColumnsSettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.settings.columnWidth = DEFAULT_SETTINGS.columnWidth;
         await this.plugin.saveSettings();
         this.display();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Individual column widths").setDesc("Drag the right edge of any column to resize that column depth. Double-click the edge to reset it.").addButton(
+      (button) => button.setButtonText("Reset all").onClick(async () => {
+        this.plugin.settings.columnWidths = [];
+        await this.plugin.saveSettings();
       })
     );
   }

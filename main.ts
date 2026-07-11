@@ -28,8 +28,11 @@ const ICON_SVG =
 const REFRESH_ALL = "*";
 const SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 const SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
+const MIN_COLUMN_WIDTH = 160;
+const MAX_COLUMN_WIDTH = 520;
 const DEFAULT_SETTINGS: MillerColumnsSettings = {
 	columnWidth: 220,
+	columnWidths: [],
 };
 
 function compareNames(a: TAbstractFile, b: TAbstractFile): number {
@@ -59,6 +62,7 @@ interface Column {
 
 interface MillerColumnsSettings {
 	columnWidth: number;
+	columnWidths: Array<number | null>;
 }
 
 class MillerColumnsView extends ItemView {
@@ -128,6 +132,7 @@ class MillerColumnsView extends ItemView {
 			"--mc-column-width",
 			`${this.plugin.settings.columnWidth}px`
 		);
+		this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
 	}
 
 	// ---------------------------------------------------------------- columns
@@ -181,6 +186,7 @@ class MillerColumnsView extends ItemView {
 			if (!folder) break;
 			const el = this.columnsEl.createDiv({ cls: "mc-column" });
 			this.columns.push({ folder, el });
+			this.applyColumnWidth(el, i);
 			this.attachColumnHandlers(el, i);
 			this.renderColumn(i);
 		}
@@ -195,9 +201,54 @@ class MillerColumnsView extends ItemView {
 		const items = this.itemsForColumn(i);
 		if (items.length === 0) {
 			col.el.createDiv({ cls: "mc-empty", text: "No pages. Right-click to create one." });
+			this.renderResizeHandle(col.el, i);
 			return;
 		}
 		for (const item of items) this.renderRow(col.el, i, item);
+		this.renderResizeHandle(col.el, i);
+	}
+
+	private applyColumnWidth(el: HTMLElement, index: number): void {
+		el.style.setProperty("--mc-column-width", `${this.plugin.columnWidthFor(index)}px`);
+	}
+
+	private renderResizeHandle(colEl: HTMLElement, colIndex: number): void {
+		const handle = colEl.createDiv({ cls: "mc-resize-handle" });
+		handle.setAttr("aria-label", "Resize column");
+		handle.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			const startX = e.clientX;
+			const startWidth = this.plugin.columnWidthFor(colIndex);
+			handle.addClass("is-resizing");
+			const onMove = (moveEvent: PointerEvent) => {
+				const width = this.plugin.setColumnWidth(
+					colIndex,
+					startWidth + moveEvent.clientX - startX
+				);
+				this.applyColumnWidth(colEl, colIndex);
+				colEl.style.setProperty("--mc-column-width", `${width}px`);
+			};
+			const onUp = () => {
+				handle.removeClass("is-resizing");
+				window.removeEventListener("pointermove", onMove);
+				window.removeEventListener("pointerup", onUp);
+				void this.plugin.saveSettings();
+			};
+			window.addEventListener("pointermove", onMove);
+			window.addEventListener("pointerup", onUp);
+		});
+		handle.addEventListener("click", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+		});
+		handle.addEventListener("dblclick", async (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this.plugin.resetColumnWidth(colIndex);
+			this.applyColumnWidth(colEl, colIndex);
+			await this.plugin.saveSettings();
+		});
 	}
 
 	private renderRow(colEl: HTMLElement, colIndex: number, item: TAbstractFile): void {
@@ -707,7 +758,16 @@ export default class MillerColumnsPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+		const loaded = (await this.loadData()) as Partial<MillerColumnsSettings> | null;
+		this.settings = {
+			...DEFAULT_SETTINGS,
+			...loaded,
+			columnWidths: Array.isArray(loaded?.columnWidths) ? loaded.columnWidths : [],
+		};
+		this.settings.columnWidth = this.clampColumnWidth(this.settings.columnWidth);
+		this.settings.columnWidths = this.settings.columnWidths.map((width) =>
+			typeof width === "number" ? this.clampColumnWidth(width) : null
+		);
 	}
 
 	async saveSettings(): Promise<void> {
@@ -716,6 +776,26 @@ export default class MillerColumnsPlugin extends Plugin {
 			const view = leaf.view;
 			if (view instanceof MillerColumnsView) view.applySettings();
 		}
+	}
+
+	columnWidthFor(index: number): number {
+		const width = this.settings.columnWidths[index];
+		return typeof width === "number" ? width : this.settings.columnWidth;
+	}
+
+	setColumnWidth(index: number, width: number): number {
+		const next = this.clampColumnWidth(width);
+		this.settings.columnWidths[index] = next;
+		return next;
+	}
+
+	resetColumnWidth(index: number): void {
+		this.settings.columnWidths[index] = null;
+	}
+
+	private clampColumnWidth(width: number): number {
+		if (!Number.isFinite(width)) return DEFAULT_SETTINGS.columnWidth;
+		return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.round(width)));
 	}
 
 	private async activateView(): Promise<void> {
@@ -739,11 +819,11 @@ class MillerColumnsSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName("Column width")
-			.setDesc("Width of each Miller column in pixels.")
+			.setName("Default column width")
+			.setDesc("Width in pixels for columns that have not been resized.")
 			.addSlider((slider) =>
 				slider
-					.setLimits(160, 420, 10)
+					.setLimits(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH, 10)
 					.setValue(this.plugin.settings.columnWidth)
 					.setDynamicTooltip()
 					.onChange(async (value) => {
@@ -760,6 +840,16 @@ class MillerColumnsSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						this.display();
 					})
+			);
+
+		new Setting(containerEl)
+			.setName("Individual column widths")
+			.setDesc("Drag the right edge of any column to resize that column depth. Double-click the edge to reset it.")
+			.addButton((button) =>
+				button.setButtonText("Reset all").onClick(async () => {
+					this.plugin.settings.columnWidths = [];
+					await this.plugin.saveSettings();
+				})
 			);
 	}
 }

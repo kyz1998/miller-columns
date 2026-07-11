@@ -57,10 +57,27 @@
 .miller-columns .mc-column {
 	flex: 0 0 var(--mc-column-width, 220px);
 	width: var(--mc-column-width, 220px);
+	position: relative;
 	overflow-y: auto;
 	overflow-x: hidden;
 	padding: 4px 0;
 	border-right: 1px solid var(--background-modifier-border);
+}
+
+.miller-columns .mc-resize-handle {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 7px;
+	cursor: col-resize;
+	z-index: 2;
+}
+
+.miller-columns .mc-resize-handle:hover,
+.miller-columns .mc-resize-handle.is-resizing {
+	background-color: var(--interactive-accent);
+	opacity: 0.35;
 }
 
 /* ------------------------------------------------------------------ rows */
