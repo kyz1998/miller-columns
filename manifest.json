@@ -3,7 +3,7 @@
 	"name": "Miller Columns",
 	"version": "1.0.0",
 	"minAppVersion": "1.4.0",
-	"description": "Browse and manage your vault with macOS Finder-style cascading columns instead of a folder tree.",
+	"description": "Browse page folders in cascading columns and automatically embed direct subpages in their notes.",
 	"author": "dl",
 	"isDesktopOnly": false
 }

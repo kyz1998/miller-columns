@@ -33,6 +33,8 @@ var VIEW_TYPE_MILLER = "miller-columns-view";
 var ICON_ID = "miller-columns";
 var ICON_SVG = '<rect x="10" y="18" width="80" height="64" rx="8" fill="none" stroke="currentColor" stroke-width="8"/><line x1="37" y1="18" x2="37" y2="82" stroke="currentColor" stroke-width="8"/><line x1="63" y1="18" x2="63" y2="82" stroke="currentColor" stroke-width="8"/>';
 var REFRESH_ALL = "*";
+var SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
+var SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
 function compareNames(a, b) {
   return a.name.localeCompare(b.name, void 0, {
     sensitivity: "base",
@@ -45,6 +47,9 @@ function parentPathOf(path) {
 }
 function errorMessage(e) {
   return e instanceof Error ? e.message : String(e);
+}
+function markdownLinkPath(file) {
+  return file.path.replace(/\.md$/i, "");
 }
 var MillerColumnsView = class extends import_obsidian.ItemView {
   constructor(leaf) {
@@ -74,14 +79,14 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.makeHeaderButton(
       header,
       "file-plus",
-      "New note",
-      () => this.createNote(this.deepestSelectedFolder())
+      "New page",
+      () => this.createPage(this.deepestSelectedFolder())
     );
     this.makeHeaderButton(
       header,
-      "folder-plus",
-      "New folder",
-      () => this.createFolder(this.deepestSelectedFolder())
+      "file-plus-2",
+      "New note",
+      () => this.createNote(this.deepestSelectedFolder())
     );
     this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
     this.columnsEl.setAttr("tabindex", "0");
@@ -116,9 +121,17 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const sel = this.selection[i - 1];
     return sel instanceof import_obsidian.TFolder ? sel : null;
   }
+  folderPagePath(folder) {
+    if (folder.isRoot()) return null;
+    return (0, import_obsidian.normalizePath)(`${folder.path}/${folder.name}.md`);
+  }
+  isFolderPage(folder, item) {
+    const pagePath = this.folderPagePath(folder);
+    return pagePath !== null && item instanceof import_obsidian.TFile && item.path === pagePath;
+  }
   visibleChildren(folder) {
     const configDir = this.app.vault.configDir;
-    return folder.children.filter((c) => c.path !== configDir);
+    return folder.children.filter((c) => c.path !== configDir && !this.isFolderPage(folder, c));
   }
   itemsForColumn(i) {
     const col = this.columns[i];
@@ -149,10 +162,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     col.el.empty();
     const items = this.itemsForColumn(i);
     if (items.length === 0) {
-      col.el.createDiv({
-        cls: "mc-empty",
-        text: "No items. Right-click to create a note."
-      });
+      col.el.createDiv({ cls: "mc-empty", text: "No pages. Right-click to create one." });
       return;
     }
     for (const item of items) this.renderRow(col.el, i, item);
@@ -162,7 +172,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     row.dataset.path = item.path;
     row.setAttr("draggable", "true");
     const iconEl = row.createSpan({ cls: "mc-icon" });
-    (0, import_obsidian.setIcon)(iconEl, item instanceof import_obsidian.TFolder ? "folder" : "file-text");
+    (0, import_obsidian.setIcon)(iconEl, "file-text");
     const displayName = item instanceof import_obsidian.TFile && item.extension === "md" ? item.basename : item.name;
     row.createSpan({ cls: "mc-name", text: displayName });
     if (item instanceof import_obsidian.TFolder) {
@@ -238,6 +248,8 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.scrollRowIntoView(colIndex, item.path);
     if (openFile && item instanceof import_obsidian.TFile) {
       void this.app.workspace.getLeaf(false).openFile(item);
+    } else if (openFile && item instanceof import_obsidian.TFolder) {
+      void this.openFolderPage(item);
     }
   }
   deepestSelectedFolder() {
@@ -295,7 +307,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
         if (sel instanceof import_obsidian.TFile) {
           void this.app.workspace.getLeaf(false).openFile(sel);
         } else if (sel instanceof import_obsidian.TFolder) {
-          this.descendIntoSelectedFolder(col);
+          void this.openFolderPage(sel);
         }
         break;
       }
@@ -342,9 +354,83 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.buildColumnsFrom(this.columnCount(), false);
     const all = affected.has(REFRESH_ALL);
     this.columns.forEach((col, i) => {
-      if (all || affected.has(col.folder.path)) this.renderColumn(i);
+      if (all || affected.has(col.folder.path)) {
+        this.renderColumn(i);
+        void this.syncFolderPage(col.folder);
+      }
     });
     this.updateSelectionClasses();
+  }
+  // ---------------------------------------------------------- page content
+  async openFolderPage(folder) {
+    try {
+      const page = await this.ensureFolderPage(folder);
+      if (!page) return;
+      await this.syncFolderPage(folder, page);
+      if (folder.parent) await this.syncFolderPage(folder.parent);
+      await this.app.workspace.getLeaf(false).openFile(page);
+    } catch (e) {
+      new import_obsidian.Notice("Could not open page: " + errorMessage(e));
+    }
+  }
+  async ensureFolderPage(folder) {
+    const path = this.folderPagePath(folder);
+    if (!path) return null;
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof import_obsidian.TFile) return existing;
+    if (existing) {
+      new import_obsidian.Notice(`Could not create page note because ${path} already exists.`);
+      return null;
+    }
+    return await this.app.vault.create(path, `# ${folder.name}
+
+${this.subpageBlock(folder)}`);
+  }
+  async syncFolderPage(folder, knownPage) {
+    if (folder.isRoot()) return;
+    try {
+      const page = knownPage != null ? knownPage : await this.ensureFolderPage(folder);
+      if (!page) return;
+      const block = this.subpageBlock(folder);
+      const current = await this.app.vault.read(page);
+      const next = this.replaceSubpageBlock(current, block);
+      if (next !== current) await this.app.vault.modify(page, next);
+    } catch (e) {
+      new import_obsidian.Notice("Could not update subpage embeds: " + errorMessage(e));
+    }
+  }
+  subpageBlock(folder) {
+    const embeds = this.subpageFiles(folder).map((file) => `![[${markdownLinkPath(file)}]]`);
+    const body = embeds.length > 0 ? embeds.join("\n\n") : "_No subpages yet._";
+    return `${SUBPAGE_BLOCK_START}
+## Subpages
+
+${body}
+${SUBPAGE_BLOCK_END}`;
+  }
+  subpageFiles(folder) {
+    const files = [];
+    for (const child of this.visibleChildren(folder)) {
+      if (child instanceof import_obsidian.TFile && child.extension === "md") {
+        files.push(child);
+      }
+      if (child instanceof import_obsidian.TFolder) {
+        const pagePath = this.folderPagePath(child);
+        const page = pagePath ? this.app.vault.getAbstractFileByPath(pagePath) : null;
+        if (page instanceof import_obsidian.TFile) files.push(page);
+      }
+    }
+    return files.sort(compareNames);
+  }
+  replaceSubpageBlock(content, block) {
+    const start = content.indexOf(SUBPAGE_BLOCK_START);
+    const end = content.indexOf(SUBPAGE_BLOCK_END);
+    if (start >= 0 && end >= start) {
+      const afterEnd = end + SUBPAGE_BLOCK_END.length;
+      return content.substring(0, start) + block + content.substring(afterEnd);
+    }
+    const trimmed = content.trimEnd();
+    return `${trimmed}${trimmed ? "\n\n" : ""}${block}`;
   }
   // ---------------------------------------------------------- file actions
   makeHeaderButton(parent, icon, label, onClick) {
@@ -359,10 +445,10 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const targetFolder = item instanceof import_obsidian.TFolder ? item : (_a = item.parent) != null ? _a : this.app.vault.getRoot();
     const menu = new import_obsidian.Menu();
     menu.addItem(
-      (mi) => mi.setTitle("New note").setIcon("file-plus").onClick(() => this.createNote(targetFolder))
+      (mi) => mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(targetFolder))
     );
     menu.addItem(
-      (mi) => mi.setTitle("New folder").setIcon("folder-plus").onClick(() => this.createFolder(targetFolder))
+      (mi) => mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(targetFolder))
     );
     menu.addSeparator();
     menu.addItem(
@@ -383,10 +469,10 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   showFolderMenu(e, folder) {
     const menu = new import_obsidian.Menu();
     menu.addItem(
-      (mi) => mi.setTitle("New note").setIcon("file-plus").onClick(() => this.createNote(folder))
+      (mi) => mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(folder))
     );
     menu.addItem(
-      (mi) => mi.setTitle("New folder").setIcon("folder-plus").onClick(() => this.createFolder(folder))
+      (mi) => mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(folder))
     );
     menu.showAtMouseEvent(e);
   }
@@ -403,19 +489,24 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     try {
       const path = this.uniquePath(folder, "Untitled", ".md");
       const file = await this.app.vault.create(path, "");
+      await this.syncFolderPage(folder);
       this.revealPath(file);
       await this.app.workspace.getLeaf(false).openFile(file);
     } catch (e) {
       new import_obsidian.Notice("Could not create note: " + errorMessage(e));
     }
   }
-  async createFolder(parent) {
+  async createPage(parent) {
     try {
-      const path = this.uniquePath(parent, "New folder", "");
+      const path = this.uniquePath(parent, "Untitled", "");
       const folder = await this.app.vault.createFolder(path);
+      const page = await this.ensureFolderPage(folder);
+      if (page) await this.syncFolderPage(folder, page);
+      await this.syncFolderPage(parent);
       this.revealPath(folder);
+      if (page) await this.app.workspace.getLeaf(false).openFile(page);
     } catch (e) {
-      new import_obsidian.Notice("Could not create folder: " + errorMessage(e));
+      new import_obsidian.Notice("Could not create page: " + errorMessage(e));
     }
   }
   // ------------------------------------------------------------ drag & drop
@@ -494,12 +585,26 @@ var RenameModal = class extends import_obsidian.Modal {
     }
     const parent = this.item.parent;
     const prefix = parent && !parent.isRoot() ? parent.path + "/" : "";
+    const oldName = this.item.name;
+    const destination = (0, import_obsidian.normalizePath)(prefix + name);
     try {
-      await this.app.fileManager.renameFile(this.item, (0, import_obsidian.normalizePath)(prefix + name));
+      await this.app.fileManager.renameFile(this.item, destination);
+      if (this.item instanceof import_obsidian.TFolder) {
+        await this.renameCompanionPage(destination, oldName, name);
+      }
       this.close();
     } catch (e) {
       new import_obsidian.Notice("Rename failed: " + errorMessage(e));
     }
+  }
+  async renameCompanionPage(folderPath, oldFolderName, newFolderName) {
+    const oldPagePath = (0, import_obsidian.normalizePath)(`${folderPath}/${oldFolderName}.md`);
+    const newPagePath = (0, import_obsidian.normalizePath)(`${folderPath}/${newFolderName}.md`);
+    if (oldPagePath === newPagePath) return;
+    const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
+    if (!(oldPage instanceof import_obsidian.TFile)) return;
+    if (this.app.vault.getAbstractFileByPath(newPagePath)) return;
+    await this.app.fileManager.renameFile(oldPage, newPagePath);
   }
   onClose() {
     this.contentEl.empty();

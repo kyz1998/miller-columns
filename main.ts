@@ -25,6 +25,8 @@ const ICON_SVG =
 
 /** Sentinel meaning "re-render every column" (used for renames, where paths cascade). */
 const REFRESH_ALL = "*";
+const SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
+const SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
 
 function compareNames(a: TAbstractFile, b: TAbstractFile): number {
 	return a.name.localeCompare(b.name, undefined, {
@@ -40,6 +42,10 @@ function parentPathOf(path: string): string {
 
 function errorMessage(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
+}
+
+function markdownLinkPath(file: TFile): string {
+	return file.path.replace(/\.md$/i, "");
 }
 
 interface Column {
@@ -79,11 +85,11 @@ class MillerColumnsView extends ItemView {
 		contentEl.addClass("miller-columns");
 
 		const header = contentEl.createDiv({ cls: "mc-header" });
-		this.makeHeaderButton(header, "file-plus", "New note", () =>
-			this.createNote(this.deepestSelectedFolder())
+		this.makeHeaderButton(header, "file-plus", "New page", () =>
+			this.createPage(this.deepestSelectedFolder())
 		);
-		this.makeHeaderButton(header, "folder-plus", "New folder", () =>
-			this.createFolder(this.deepestSelectedFolder())
+		this.makeHeaderButton(header, "file-plus-2", "New note", () =>
+			this.createNote(this.deepestSelectedFolder())
 		);
 
 		this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
@@ -126,9 +132,19 @@ class MillerColumnsView extends ItemView {
 		return sel instanceof TFolder ? sel : null;
 	}
 
+	private folderPagePath(folder: TFolder): string | null {
+		if (folder.isRoot()) return null;
+		return normalizePath(`${folder.path}/${folder.name}.md`);
+	}
+
+	private isFolderPage(folder: TFolder, item: TAbstractFile): boolean {
+		const pagePath = this.folderPagePath(folder);
+		return pagePath !== null && item instanceof TFile && item.path === pagePath;
+	}
+
 	private visibleChildren(folder: TFolder): TAbstractFile[] {
 		const configDir = this.app.vault.configDir;
-		return folder.children.filter((c) => c.path !== configDir);
+		return folder.children.filter((c) => c.path !== configDir && !this.isFolderPage(folder, c));
 	}
 
 	private itemsForColumn(i: number): TAbstractFile[] {
@@ -162,10 +178,7 @@ class MillerColumnsView extends ItemView {
 		col.el.empty();
 		const items = this.itemsForColumn(i);
 		if (items.length === 0) {
-			col.el.createDiv({
-				cls: "mc-empty",
-				text: "No items. Right-click to create a note.",
-			});
+			col.el.createDiv({ cls: "mc-empty", text: "No pages. Right-click to create one." });
 			return;
 		}
 		for (const item of items) this.renderRow(col.el, i, item);
@@ -177,7 +190,7 @@ class MillerColumnsView extends ItemView {
 		row.setAttr("draggable", "true");
 
 		const iconEl = row.createSpan({ cls: "mc-icon" });
-		setIcon(iconEl, item instanceof TFolder ? "folder" : "file-text");
+		setIcon(iconEl, "file-text");
 
 		const displayName =
 			item instanceof TFile && item.extension === "md" ? item.basename : item.name;
@@ -260,6 +273,8 @@ class MillerColumnsView extends ItemView {
 		this.scrollRowIntoView(colIndex, item.path);
 		if (openFile && item instanceof TFile) {
 			void this.app.workspace.getLeaf(false).openFile(item);
+		} else if (openFile && item instanceof TFolder) {
+			void this.openFolderPage(item);
 		}
 	}
 
@@ -322,7 +337,7 @@ class MillerColumnsView extends ItemView {
 				if (sel instanceof TFile) {
 					void this.app.workspace.getLeaf(false).openFile(sel);
 				} else if (sel instanceof TFolder) {
-					this.descendIntoSelectedFolder(col);
+					void this.openFolderPage(sel);
 				}
 				break;
 			}
@@ -379,9 +394,84 @@ class MillerColumnsView extends ItemView {
 
 		const all = affected.has(REFRESH_ALL);
 		this.columns.forEach((col, i) => {
-			if (all || affected.has(col.folder.path)) this.renderColumn(i);
+			if (all || affected.has(col.folder.path)) {
+				this.renderColumn(i);
+				void this.syncFolderPage(col.folder);
+			}
 		});
 		this.updateSelectionClasses();
+	}
+
+	// ---------------------------------------------------------- page content
+
+	private async openFolderPage(folder: TFolder): Promise<void> {
+		try {
+			const page = await this.ensureFolderPage(folder);
+			if (!page) return;
+			await this.syncFolderPage(folder, page);
+			if (folder.parent) await this.syncFolderPage(folder.parent);
+			await this.app.workspace.getLeaf(false).openFile(page);
+		} catch (e) {
+			new Notice("Could not open page: " + errorMessage(e));
+		}
+	}
+
+	private async ensureFolderPage(folder: TFolder): Promise<TFile | null> {
+		const path = this.folderPagePath(folder);
+		if (!path) return null;
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		if (existing instanceof TFile) return existing;
+		if (existing) {
+			new Notice(`Could not create page note because ${path} already exists.`);
+			return null;
+		}
+		return await this.app.vault.create(path, `# ${folder.name}\n\n${this.subpageBlock(folder)}`);
+	}
+
+	private async syncFolderPage(folder: TFolder, knownPage?: TFile | null): Promise<void> {
+		if (folder.isRoot()) return;
+		try {
+			const page = knownPage ?? (await this.ensureFolderPage(folder));
+			if (!page) return;
+			const block = this.subpageBlock(folder);
+			const current = await this.app.vault.read(page);
+			const next = this.replaceSubpageBlock(current, block);
+			if (next !== current) await this.app.vault.modify(page, next);
+		} catch (e) {
+			new Notice("Could not update subpage embeds: " + errorMessage(e));
+		}
+	}
+
+	private subpageBlock(folder: TFolder): string {
+		const embeds = this.subpageFiles(folder).map((file) => `![[${markdownLinkPath(file)}]]`);
+		const body = embeds.length > 0 ? embeds.join("\n\n") : "_No subpages yet._";
+		return `${SUBPAGE_BLOCK_START}\n## Subpages\n\n${body}\n${SUBPAGE_BLOCK_END}`;
+	}
+
+	private subpageFiles(folder: TFolder): TFile[] {
+		const files: TFile[] = [];
+		for (const child of this.visibleChildren(folder)) {
+			if (child instanceof TFile && child.extension === "md") {
+				files.push(child);
+			}
+			if (child instanceof TFolder) {
+				const pagePath = this.folderPagePath(child);
+				const page = pagePath ? this.app.vault.getAbstractFileByPath(pagePath) : null;
+				if (page instanceof TFile) files.push(page);
+			}
+		}
+		return files.sort(compareNames);
+	}
+
+	private replaceSubpageBlock(content: string, block: string): string {
+		const start = content.indexOf(SUBPAGE_BLOCK_START);
+		const end = content.indexOf(SUBPAGE_BLOCK_END);
+		if (start >= 0 && end >= start) {
+			const afterEnd = end + SUBPAGE_BLOCK_END.length;
+			return content.substring(0, start) + block + content.substring(afterEnd);
+		}
+		const trimmed = content.trimEnd();
+		return `${trimmed}${trimmed ? "\n\n" : ""}${block}`;
 	}
 
 	// ---------------------------------------------------------- file actions
@@ -404,10 +494,10 @@ class MillerColumnsView extends ItemView {
 			item instanceof TFolder ? item : item.parent ?? this.app.vault.getRoot();
 		const menu = new Menu();
 		menu.addItem((mi) =>
-			mi.setTitle("New note").setIcon("file-plus").onClick(() => this.createNote(targetFolder))
+			mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(targetFolder))
 		);
 		menu.addItem((mi) =>
-			mi.setTitle("New folder").setIcon("folder-plus").onClick(() => this.createFolder(targetFolder))
+			mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(targetFolder))
 		);
 		menu.addSeparator();
 		menu.addItem((mi) =>
@@ -429,10 +519,10 @@ class MillerColumnsView extends ItemView {
 	private showFolderMenu(e: MouseEvent, folder: TFolder): void {
 		const menu = new Menu();
 		menu.addItem((mi) =>
-			mi.setTitle("New note").setIcon("file-plus").onClick(() => this.createNote(folder))
+			mi.setTitle("New page").setIcon("file-plus").onClick(() => this.createPage(folder))
 		);
 		menu.addItem((mi) =>
-			mi.setTitle("New folder").setIcon("folder-plus").onClick(() => this.createFolder(folder))
+			mi.setTitle("New note").setIcon("file-plus-2").onClick(() => this.createNote(folder))
 		);
 		menu.showAtMouseEvent(e);
 	}
@@ -451,6 +541,7 @@ class MillerColumnsView extends ItemView {
 		try {
 			const path = this.uniquePath(folder, "Untitled", ".md");
 			const file = await this.app.vault.create(path, "");
+			await this.syncFolderPage(folder);
 			this.revealPath(file);
 			await this.app.workspace.getLeaf(false).openFile(file);
 		} catch (e) {
@@ -458,13 +549,17 @@ class MillerColumnsView extends ItemView {
 		}
 	}
 
-	private async createFolder(parent: TFolder): Promise<void> {
+	private async createPage(parent: TFolder): Promise<void> {
 		try {
-			const path = this.uniquePath(parent, "New folder", "");
+			const path = this.uniquePath(parent, "Untitled", "");
 			const folder = await this.app.vault.createFolder(path);
+			const page = await this.ensureFolderPage(folder);
+			if (page) await this.syncFolderPage(folder, page);
+			await this.syncFolderPage(parent);
 			this.revealPath(folder);
+			if (page) await this.app.workspace.getLeaf(false).openFile(page);
 		} catch (e) {
-			new Notice("Could not create folder: " + errorMessage(e));
+			new Notice("Could not create page: " + errorMessage(e));
 		}
 	}
 
@@ -547,12 +642,31 @@ class RenameModal extends Modal {
 		}
 		const parent = this.item.parent;
 		const prefix = parent && !parent.isRoot() ? parent.path + "/" : "";
+		const oldName = this.item.name;
+		const destination = normalizePath(prefix + name);
 		try {
-			await this.app.fileManager.renameFile(this.item, normalizePath(prefix + name));
+			await this.app.fileManager.renameFile(this.item, destination);
+			if (this.item instanceof TFolder) {
+				await this.renameCompanionPage(destination, oldName, name);
+			}
 			this.close();
 		} catch (e) {
 			new Notice("Rename failed: " + errorMessage(e));
 		}
+	}
+
+	private async renameCompanionPage(
+		folderPath: string,
+		oldFolderName: string,
+		newFolderName: string
+	): Promise<void> {
+		const oldPagePath = normalizePath(`${folderPath}/${oldFolderName}.md`);
+		const newPagePath = normalizePath(`${folderPath}/${newFolderName}.md`);
+		if (oldPagePath === newPagePath) return;
+		const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
+		if (!(oldPage instanceof TFile)) return;
+		if (this.app.vault.getAbstractFileByPath(newPagePath)) return;
+		await this.app.fileManager.renameFile(oldPage, newPagePath);
 	}
 
 	onClose(): void {
