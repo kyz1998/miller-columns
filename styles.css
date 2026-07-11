@@ -55,8 +55,8 @@
 }
 
 .miller-columns .mc-column {
-	flex: 0 0 220px;
-	width: 220px;
+	flex: 0 0 var(--mc-column-width, 220px);
+	width: var(--mc-column-width, 220px);
 	overflow-y: auto;
 	overflow-x: hidden;
 	padding: 4px 0;

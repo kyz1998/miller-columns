@@ -5,6 +5,7 @@ import {
 	Modal,
 	Notice,
 	Plugin,
+	PluginSettingTab,
 	Setting,
 	TAbstractFile,
 	TFile,
@@ -27,6 +28,9 @@ const ICON_SVG =
 const REFRESH_ALL = "*";
 const SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 const SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
+const DEFAULT_SETTINGS: MillerColumnsSettings = {
+	columnWidth: 220,
+};
 
 function compareNames(a: TAbstractFile, b: TAbstractFile): number {
 	return a.name.localeCompare(b.name, undefined, {
@@ -53,6 +57,10 @@ interface Column {
 	el: HTMLElement;
 }
 
+interface MillerColumnsSettings {
+	columnWidth: number;
+}
+
 class MillerColumnsView extends ItemView {
 	/** selection[i] is the selected item in column i; only the last entry may be a file. */
 	private selection: TAbstractFile[] = [];
@@ -62,7 +70,7 @@ class MillerColumnsView extends ItemView {
 	private affected = new Set<string>();
 	private refreshQueued = false;
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(leaf: WorkspaceLeaf, private readonly plugin: MillerColumnsPlugin) {
 		super(leaf);
 		this.navigation = false;
 	}
@@ -83,6 +91,7 @@ class MillerColumnsView extends ItemView {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("miller-columns");
+		this.applySettings();
 
 		const header = contentEl.createDiv({ cls: "mc-header" });
 		this.makeHeaderButton(header, "file-plus", "New page", () =>
@@ -112,6 +121,13 @@ class MillerColumnsView extends ItemView {
 	async onClose(): Promise<void> {
 		this.columns = [];
 		this.contentEl.empty();
+	}
+
+	applySettings(): void {
+		this.contentEl.style.setProperty(
+			"--mc-column-width",
+			`${this.plugin.settings.columnWidth}px`
+		);
 	}
 
 	// ---------------------------------------------------------------- columns
@@ -675,15 +691,31 @@ class RenameModal extends Modal {
 }
 
 export default class MillerColumnsPlugin extends Plugin {
+	settings: MillerColumnsSettings;
+
 	async onload(): Promise<void> {
+		await this.loadSettings();
 		addIcon(ICON_ID, ICON_SVG);
-		this.registerView(VIEW_TYPE_MILLER, (leaf) => new MillerColumnsView(leaf));
+		this.registerView(VIEW_TYPE_MILLER, (leaf) => new MillerColumnsView(leaf, this));
+		this.addSettingTab(new MillerColumnsSettingTab(this.app, this));
 		this.addRibbonIcon(ICON_ID, "Open Miller Columns", () => void this.activateView());
 		this.addCommand({
 			id: "open",
 			name: "Open",
 			callback: () => void this.activateView(),
 		});
+	}
+
+	async loadSettings(): Promise<void> {
+		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MILLER)) {
+			const view = leaf.view;
+			if (view instanceof MillerColumnsView) view.applySettings();
+		}
 	}
 
 	private async activateView(): Promise<void> {
@@ -694,5 +726,40 @@ export default class MillerColumnsPlugin extends Plugin {
 			await leaf.setViewState({ type: VIEW_TYPE_MILLER, active: true });
 		}
 		await workspace.revealLeaf(leaf);
+	}
+}
+
+class MillerColumnsSettingTab extends PluginSettingTab {
+	constructor(app: App, private readonly plugin: MillerColumnsPlugin) {
+		super(app, plugin);
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("Column width")
+			.setDesc("Width of each Miller column in pixels.")
+			.addSlider((slider) =>
+				slider
+					.setLimits(160, 420, 10)
+					.setValue(this.plugin.settings.columnWidth)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.columnWidth = value;
+						await this.plugin.saveSettings();
+					})
+			)
+			.addExtraButton((button) =>
+				button
+					.setIcon("reset")
+					.setTooltip("Reset to default")
+					.onClick(async () => {
+						this.plugin.settings.columnWidth = DEFAULT_SETTINGS.columnWidth;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
 	}
 }

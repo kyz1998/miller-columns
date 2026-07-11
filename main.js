@@ -35,6 +35,9 @@ var ICON_SVG = '<rect x="10" y="18" width="80" height="64" rx="8" fill="none" st
 var REFRESH_ALL = "*";
 var SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 var SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
+var DEFAULT_SETTINGS = {
+  columnWidth: 220
+};
 function compareNames(a, b) {
   return a.name.localeCompare(b.name, void 0, {
     sensitivity: "base",
@@ -52,8 +55,9 @@ function markdownLinkPath(file) {
   return file.path.replace(/\.md$/i, "");
 }
 var MillerColumnsView = class extends import_obsidian.ItemView {
-  constructor(leaf) {
+  constructor(leaf, plugin) {
     super(leaf);
+    this.plugin = plugin;
     /** selection[i] is the selected item in column i; only the last entry may be a file. */
     this.selection = [];
     this.activeColumn = 0;
@@ -75,6 +79,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("miller-columns");
+    this.applySettings();
     const header = contentEl.createDiv({ cls: "mc-header" });
     this.makeHeaderButton(
       header,
@@ -105,6 +110,12 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   async onClose() {
     this.columns = [];
     this.contentEl.empty();
+  }
+  applySettings() {
+    this.contentEl.style.setProperty(
+      "--mc-column-width",
+      `${this.plugin.settings.columnWidth}px`
+    );
   }
   // ---------------------------------------------------------------- columns
   /** Number of columns implied by the current selection (root + one per selected folder). */
@@ -612,14 +623,26 @@ var RenameModal = class extends import_obsidian.Modal {
 };
 var MillerColumnsPlugin = class extends import_obsidian.Plugin {
   async onload() {
+    await this.loadSettings();
     (0, import_obsidian.addIcon)(ICON_ID, ICON_SVG);
-    this.registerView(VIEW_TYPE_MILLER, (leaf) => new MillerColumnsView(leaf));
+    this.registerView(VIEW_TYPE_MILLER, (leaf) => new MillerColumnsView(leaf, this));
+    this.addSettingTab(new MillerColumnsSettingTab(this.app, this));
     this.addRibbonIcon(ICON_ID, "Open Miller Columns", () => void this.activateView());
     this.addCommand({
       id: "open",
       name: "Open",
       callback: () => void this.activateView()
     });
+  }
+  async loadSettings() {
+    this.settings = { ...DEFAULT_SETTINGS, ...await this.loadData() };
+  }
+  async saveSettings() {
+    await this.saveData(this.settings);
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MILLER)) {
+      const view = leaf.view;
+      if (view instanceof MillerColumnsView) view.applySettings();
+    }
   }
   async activateView() {
     var _a;
@@ -630,5 +653,27 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
       await leaf.setViewState({ type: VIEW_TYPE_MILLER, active: true });
     }
     await workspace.revealLeaf(leaf);
+  }
+};
+var MillerColumnsSettingTab = class extends import_obsidian.PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    new import_obsidian.Setting(containerEl).setName("Column width").setDesc("Width of each Miller column in pixels.").addSlider(
+      (slider) => slider.setLimits(160, 420, 10).setValue(this.plugin.settings.columnWidth).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.columnWidth = value;
+        await this.plugin.saveSettings();
+      })
+    ).addExtraButton(
+      (button) => button.setIcon("reset").setTooltip("Reset to default").onClick(async () => {
+        this.plugin.settings.columnWidth = DEFAULT_SETTINGS.columnWidth;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
   }
 };
