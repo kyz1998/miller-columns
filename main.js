@@ -68,6 +68,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.selection = [];
     this.activeColumn = 0;
     this.columns = [];
+    this.pageLeaf = null;
     this.affected = /* @__PURE__ */ new Set();
     this.refreshQueued = false;
     this.navigation = false;
@@ -303,7 +304,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.buildColumnsFrom(colIndex + 1);
     this.scrollRowIntoView(colIndex, item.path);
     if (openFile && item instanceof import_obsidian.TFile) {
-      void this.app.workspace.getLeaf(false).openFile(item);
+      void this.openPageFile(item);
     } else if (openFile && item instanceof import_obsidian.TFolder) {
       void this.openFolderPage(item);
     }
@@ -361,7 +362,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       case "Enter": {
         const sel = this.selection[col];
         if (sel instanceof import_obsidian.TFile) {
-          void this.app.workspace.getLeaf(false).openFile(sel);
+          void this.openPageFile(sel);
         } else if (sel instanceof import_obsidian.TFolder) {
           void this.openFolderPage(sel);
         }
@@ -424,10 +425,28 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       if (!page) return;
       await this.syncFolderPage(folder, page);
       if (folder.parent) await this.syncFolderPage(folder.parent);
-      await this.app.workspace.getLeaf(false).openFile(page);
+      await this.openPageFile(page);
     } catch (e) {
       new import_obsidian.Notice("Could not open page: " + errorMessage(e));
     }
+  }
+  async openPageFile(file) {
+    const leaf = this.rightPageLeaf();
+    await leaf.openFile(file);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  rightPageLeaf() {
+    if (this.pageLeaf && this.isLeafAttached(this.pageLeaf)) return this.pageLeaf;
+    this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
+    this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
+    return this.pageLeaf;
+  }
+  isLeafAttached(target) {
+    let found = false;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf === target) found = true;
+    });
+    return found;
   }
   async ensureFolderPage(folder) {
     const path = this.folderPagePath(folder);
@@ -541,7 +560,7 @@ ${body}${SUBPAGE_BLOCK_END}`;
       if (page) await this.syncFolderPage(folder, page);
       await this.syncFolderPage(parent);
       this.revealPath(folder);
-      if (page) await this.app.workspace.getLeaf(false).openFile(page);
+      if (page) await this.openPageFile(page);
     } catch (e) {
       new import_obsidian.Notice("Could not create page: " + errorMessage(e));
     }

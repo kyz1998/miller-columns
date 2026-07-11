@@ -75,6 +75,7 @@ class MillerColumnsView extends ItemView {
 	private activeColumn = 0;
 	private columns: Column[] = [];
 	private columnsEl: HTMLElement;
+	private pageLeaf: WorkspaceLeaf | null = null;
 	private affected = new Set<string>();
 	private refreshQueued = false;
 
@@ -340,7 +341,7 @@ class MillerColumnsView extends ItemView {
 		this.buildColumnsFrom(colIndex + 1);
 		this.scrollRowIntoView(colIndex, item.path);
 		if (openFile && item instanceof TFile) {
-			void this.app.workspace.getLeaf(false).openFile(item);
+			void this.openPageFile(item);
 		} else if (openFile && item instanceof TFolder) {
 			void this.openFolderPage(item);
 		}
@@ -403,7 +404,7 @@ class MillerColumnsView extends ItemView {
 			case "Enter": {
 				const sel = this.selection[col];
 				if (sel instanceof TFile) {
-					void this.app.workspace.getLeaf(false).openFile(sel);
+					void this.openPageFile(sel);
 				} else if (sel instanceof TFolder) {
 					void this.openFolderPage(sel);
 				}
@@ -478,10 +479,31 @@ class MillerColumnsView extends ItemView {
 			if (!page) return;
 			await this.syncFolderPage(folder, page);
 			if (folder.parent) await this.syncFolderPage(folder.parent);
-			await this.app.workspace.getLeaf(false).openFile(page);
+			await this.openPageFile(page);
 		} catch (e) {
 			new Notice("Could not open page: " + errorMessage(e));
 		}
+	}
+
+	private async openPageFile(file: TFile): Promise<void> {
+		const leaf = this.rightPageLeaf();
+		await leaf.openFile(file);
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+	}
+
+	private rightPageLeaf(): WorkspaceLeaf {
+		if (this.pageLeaf && this.isLeafAttached(this.pageLeaf)) return this.pageLeaf;
+		this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
+		this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
+		return this.pageLeaf;
+	}
+
+	private isLeafAttached(target: WorkspaceLeaf): boolean {
+		let found = false;
+		this.app.workspace.iterateAllLeaves((leaf) => {
+			if (leaf === target) found = true;
+		});
+		return found;
 	}
 
 	private async ensureFolderPage(folder: TFolder): Promise<TFile | null> {
@@ -607,7 +629,7 @@ class MillerColumnsView extends ItemView {
 			if (page) await this.syncFolderPage(folder, page);
 			await this.syncFolderPage(parent);
 			this.revealPath(folder);
-			if (page) await this.app.workspace.getLeaf(false).openFile(page);
+			if (page) await this.openPageFile(page);
 		} catch (e) {
 			new Notice("Could not create page: " + errorMessage(e));
 		}
