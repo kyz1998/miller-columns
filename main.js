@@ -443,6 +443,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     await leaf.openFile(file, { state: { mode: "preview" } });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.enforceMillerPaneMaxWidthSoon();
+    this.releaseMillerPaneWidthSoon();
     this.rememberMillerPaneWidthSoon();
   }
   rightPageLeaf() {
@@ -497,6 +498,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       window.setTimeout(() => this.enforceMillerPaneMaxWidth(), delay);
     }
   }
+  releaseMillerPaneWidthSoon() {
+    window.setTimeout(() => this.releaseMillerPaneWidth(), 300);
+  }
   applyMillerPaneWidth(el, width) {
     const px = `${width}px`;
     el.style.width = px;
@@ -504,6 +508,13 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     el.style.flexBasis = px;
     el.style.flexGrow = "0";
     el.style.flexShrink = "0";
+  }
+  releaseMillerPaneWidth() {
+    const el = this.millerPaneEl();
+    if (!el) return;
+    el.style.maxWidth = "";
+    el.style.flexGrow = "";
+    el.style.flexShrink = "";
   }
   isLeafAttached(target) {
     let found = false;

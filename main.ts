@@ -505,6 +505,7 @@ class MillerColumnsView extends ItemView {
 		await leaf.openFile(file, { state: { mode: "preview" } });
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 		this.enforceMillerPaneMaxWidthSoon();
+		this.releaseMillerPaneWidthSoon();
 		this.rememberMillerPaneWidthSoon();
 	}
 
@@ -568,6 +569,10 @@ class MillerColumnsView extends ItemView {
 		}
 	}
 
+	private releaseMillerPaneWidthSoon(): void {
+		window.setTimeout(() => this.releaseMillerPaneWidth(), 300);
+	}
+
 	private applyMillerPaneWidth(el: HTMLElement, width: number): void {
 		const px = `${width}px`;
 		el.style.width = px;
@@ -575,6 +580,14 @@ class MillerColumnsView extends ItemView {
 		el.style.flexBasis = px;
 		el.style.flexGrow = "0";
 		el.style.flexShrink = "0";
+	}
+
+	private releaseMillerPaneWidth(): void {
+		const el = this.millerPaneEl();
+		if (!el) return;
+		el.style.maxWidth = "";
+		el.style.flexGrow = "";
+		el.style.flexShrink = "";
 	}
 
 	private isLeafAttached(target: WorkspaceLeaf): boolean {

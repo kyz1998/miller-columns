@@ -1,6 +1,6 @@
 {
 	"name": "miller-columns",
-	"version": "1.0.6",
+	"version": "1.0.7",
 	"description": "Obsidian plugin: browse your vault with macOS Finder-style cascading columns.",
 	"main": "main.js",
 	"scripts": {
