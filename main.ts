@@ -29,6 +29,7 @@ const REFRESH_ALL = "*";
 const SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 const SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
 const MIN_COLUMN_WIDTH = 64;
+const COMPACT_COLUMN_WIDTH = 96;
 const MAX_COLUMN_WIDTH = 520;
 const DEFAULT_SETTINGS: MillerColumnsSettings = {
 	columnWidth: 220,
@@ -112,11 +113,6 @@ class MillerColumnsView extends ItemView {
 		contentEl.empty();
 		contentEl.addClass("miller-columns");
 		this.applySettings();
-
-		const header = contentEl.createDiv({ cls: "mc-header" });
-		this.makeHeaderButton(header, "file-plus", "New page", () =>
-			this.createPage(this.deepestSelectedFolder())
-		);
 
 		this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
 		this.columnsEl.setAttr("tabindex", "0");
@@ -225,7 +221,9 @@ class MillerColumnsView extends ItemView {
 	}
 
 	private applyColumnWidth(el: HTMLElement, index: number): void {
-		el.style.setProperty("--mc-column-width", `${this.plugin.columnWidthFor(index)}px`);
+		const width = this.plugin.columnWidthFor(index);
+		el.style.setProperty("--mc-column-width", `${width}px`);
+		el.toggleClass("is-narrow", width < COMPACT_COLUMN_WIDTH);
 	}
 
 	private renderResizeHandle(colEl: HTMLElement, colIndex: number): void {
@@ -361,15 +359,6 @@ class MillerColumnsView extends ItemView {
 		} else if (openFile && item instanceof TFolder) {
 			void this.openFolderPage(item);
 		}
-	}
-
-	private deepestSelectedFolder(): TFolder {
-		let target: TFolder = this.app.vault.getRoot();
-		for (const item of this.selection) {
-			if (item instanceof TFolder) target = item;
-			else break;
-		}
-		return target;
 	}
 
 	/** Select the full ancestor chain of `item` and rebuild all columns around it. */
@@ -604,19 +593,6 @@ class MillerColumnsView extends ItemView {
 	}
 
 	// ---------------------------------------------------------- file actions
-
-	private makeHeaderButton(
-		parent: HTMLElement,
-		icon: string,
-		label: string,
-		onClick: () => void
-	): void {
-		const btn = parent.createEl("button", { cls: "mc-btn" });
-		const iconEl = btn.createSpan({ cls: "mc-btn-icon" });
-		setIcon(iconEl, icon);
-		btn.createSpan({ text: label });
-		btn.addEventListener("click", onClick);
-	}
 
 	private showItemMenu(e: MouseEvent, item: TAbstractFile): void {
 		const targetFolder =

@@ -36,6 +36,7 @@ var REFRESH_ALL = "*";
 var SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 var SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
 var MIN_COLUMN_WIDTH = 64;
+var COMPACT_COLUMN_WIDTH = 96;
 var MAX_COLUMN_WIDTH = 520;
 var DEFAULT_SETTINGS = {
   columnWidth: 220,
@@ -92,13 +93,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     contentEl.empty();
     contentEl.addClass("miller-columns");
     this.applySettings();
-    const header = contentEl.createDiv({ cls: "mc-header" });
-    this.makeHeaderButton(
-      header,
-      "file-plus",
-      "New page",
-      () => this.createPage(this.deepestSelectedFolder())
-    );
     this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
     this.columnsEl.setAttr("tabindex", "0");
     this.columnsEl.addEventListener("keydown", (e) => this.onKeyDown(e));
@@ -192,7 +186,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.renderResizeHandle(col.el, i);
   }
   applyColumnWidth(el, index) {
-    el.style.setProperty("--mc-column-width", `${this.plugin.columnWidthFor(index)}px`);
+    const width = this.plugin.columnWidthFor(index);
+    el.style.setProperty("--mc-column-width", `${width}px`);
+    el.toggleClass("is-narrow", width < COMPACT_COLUMN_WIDTH);
   }
   renderResizeHandle(colEl, colIndex) {
     const handle = colEl.createDiv({ cls: "mc-resize-handle" });
@@ -319,14 +315,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     } else if (openFile && item instanceof import_obsidian.TFolder) {
       void this.openFolderPage(item);
     }
-  }
-  deepestSelectedFolder() {
-    let target = this.app.vault.getRoot();
-    for (const item of this.selection) {
-      if (item instanceof import_obsidian.TFolder) target = item;
-      else break;
-    }
-    return target;
   }
   /** Select the full ancestor chain of `item` and rebuild all columns around it. */
   revealPath(item) {
@@ -537,13 +525,6 @@ ${body}${SUBPAGE_BLOCK_END}`;
     return content.substring(0, leadingWhitespaceLength) + afterHeading.trimStart();
   }
   // ---------------------------------------------------------- file actions
-  makeHeaderButton(parent, icon, label, onClick) {
-    const btn = parent.createEl("button", { cls: "mc-btn" });
-    const iconEl = btn.createSpan({ cls: "mc-btn-icon" });
-    (0, import_obsidian.setIcon)(iconEl, icon);
-    btn.createSpan({ text: label });
-    btn.addEventListener("click", onClick);
-  }
   showItemMenu(e, item) {
     var _a;
     const targetFolder = item instanceof import_obsidian.TFolder ? item : (_a = item.parent) != null ? _a : this.app.vault.getRoot();

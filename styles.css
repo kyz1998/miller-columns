@@ -9,33 +9,8 @@
 	color: var(--text-normal);
 }
 
-/* ------------------------------------------------------------- header bar */
-
-.miller-columns .mc-header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex: 0 0 auto;
-	padding: 6px 10px;
-	border-bottom: 1px solid var(--background-modifier-border);
-	background-color: var(--background-secondary);
-}
-
-.miller-columns .mc-btn {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
-	font-size: var(--font-ui-small, 13px);
-}
-
-.miller-columns .mc-btn-icon {
-	display: inline-flex;
-	align-items: center;
-}
-
-.miller-columns .mc-btn-icon svg {
-	width: 14px;
-	height: 14px;
+.workspace-leaf-content[data-type="miller-columns-view"] .view-header {
+	display: none;
 }
 
 /* --------------------------------------------------------------- columns */
@@ -119,6 +94,11 @@
 .miller-columns .mc-icon svg {
 	width: 15px;
 	height: 15px;
+}
+
+.miller-columns .mc-column.is-narrow .mc-icon,
+.miller-columns .mc-column.is-narrow .mc-count {
+	display: none;
 }
 
 .miller-columns .mc-item.is-selected.is-active .mc-icon,
