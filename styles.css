@@ -60,9 +60,9 @@
 .miller-columns .mc-item {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	height: 28px;
-	padding: 0 8px;
+	gap: 4px;
+	height: 24px;
+	padding: 0 6px;
 	cursor: default;
 	color: var(--text-normal);
 	white-space: nowrap;
@@ -92,8 +92,8 @@
 }
 
 .miller-columns .mc-icon svg {
-	width: 15px;
-	height: 15px;
+	width: 13px;
+	height: 13px;
 }
 
 .miller-columns .mc-column.is-narrow .mc-icon,
@@ -111,14 +111,14 @@
 	flex: 1 1 auto;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	font-size: var(--font-ui-small, 13px);
+	font-size: var(--font-ui-smaller, 12px);
 }
 
 .miller-columns .mc-count {
 	flex: 0 0 auto;
-	font-size: 10px;
+	font-size: 9px;
 	line-height: 1;
-	padding: 2px 5px;
+	padding: 2px 4px;
 	border-radius: 8px;
 	color: var(--text-muted);
 	background-color: var(--background-modifier-hover);
