@@ -510,9 +510,10 @@ class MillerColumnsView extends ItemView {
 	}
 
 	private async openPageFile(file: TFile): Promise<void> {
-		const leaf = this.app.workspace.getLeaf(false);
+		const { workspace } = this.app;
+		const leaf = workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false);
 		await leaf.openFile(file, { state: { mode: "preview" } });
-		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		workspace.setActiveLeaf(leaf, { focus: true });
 	}
 
 	private async ensureFolderPage(folder: TFolder): Promise<TFile | null> {

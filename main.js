@@ -447,9 +447,11 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     }
   }
   async openPageFile(file) {
-    const leaf = this.app.workspace.getLeaf(false);
+    var _a;
+    const { workspace } = this.app;
+    const leaf = (_a = workspace.getMostRecentLeaf(workspace.rootSplit)) != null ? _a : workspace.getLeaf(false);
     await leaf.openFile(file, { state: { mode: "preview" } });
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    workspace.setActiveLeaf(leaf, { focus: true });
   }
   async ensureFolderPage(folder) {
     const path = this.folderPagePath(folder);
