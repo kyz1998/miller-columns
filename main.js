@@ -129,7 +129,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       `${this.plugin.settings.columnWidth}px`
     );
     this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
-    this.enforceMillerPaneMaxWidth();
+    this.enforceMillerPaneMaxWidthSoon();
   }
   // ---------------------------------------------------------------- columns
   /** Number of columns implied by the current selection (root + one per selected folder). */
@@ -439,9 +439,10 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
     if (!hadPageLeaf) this.enforceMillerPaneMaxWidth();
     const leaf = this.rightPageLeaf();
-    if (!hadPageLeaf) this.restoreMillerPaneWidth();
+    if (!hadPageLeaf) this.restoreMillerPaneWidthSoon();
     await leaf.openFile(file, { state: { mode: "preview" } });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.enforceMillerPaneMaxWidthSoon();
     this.rememberMillerPaneWidthSoon();
   }
   rightPageLeaf() {
@@ -472,12 +473,14 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       this.plugin.maxMillerPaneWidth()
     );
     if (!width) return;
-    window.requestAnimationFrame(() => {
-      const el = this.millerPaneEl();
-      if (!el) return;
-      el.style.width = `${width}px`;
-      el.style.flexBasis = `${width}px`;
-    });
+    const el = this.millerPaneEl();
+    if (!el) return;
+    this.applyMillerPaneWidth(el, width);
+  }
+  restoreMillerPaneWidthSoon() {
+    for (const delay of [0, 50, 150]) {
+      window.setTimeout(() => this.restoreMillerPaneWidth(), delay);
+    }
   }
   enforceMillerPaneMaxWidth() {
     const el = this.millerPaneEl();
@@ -485,9 +488,22 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const maxWidth = this.plugin.maxMillerPaneWidth();
     const currentWidth = el.getBoundingClientRect().width;
     if (currentWidth > maxWidth) {
-      el.style.width = `${maxWidth}px`;
-      el.style.flexBasis = `${maxWidth}px`;
+      this.applyMillerPaneWidth(el, maxWidth);
     }
+  }
+  enforceMillerPaneMaxWidthSoon() {
+    window.requestAnimationFrame(() => this.enforceMillerPaneMaxWidth());
+    for (const delay of [50, 150]) {
+      window.setTimeout(() => this.enforceMillerPaneMaxWidth(), delay);
+    }
+  }
+  applyMillerPaneWidth(el, width) {
+    const px = `${width}px`;
+    el.style.width = px;
+    el.style.maxWidth = px;
+    el.style.flexBasis = px;
+    el.style.flexGrow = "0";
+    el.style.flexShrink = "0";
   }
   isLeafAttached(target) {
     let found = false;

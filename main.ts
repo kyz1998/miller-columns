@@ -155,7 +155,7 @@ class MillerColumnsView extends ItemView {
 			`${this.plugin.settings.columnWidth}px`
 		);
 		this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
-		this.enforceMillerPaneMaxWidth();
+		this.enforceMillerPaneMaxWidthSoon();
 	}
 
 	// ---------------------------------------------------------------- columns
@@ -501,9 +501,10 @@ class MillerColumnsView extends ItemView {
 		const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
 		if (!hadPageLeaf) this.enforceMillerPaneMaxWidth();
 		const leaf = this.rightPageLeaf();
-		if (!hadPageLeaf) this.restoreMillerPaneWidth();
+		if (!hadPageLeaf) this.restoreMillerPaneWidthSoon();
 		await leaf.openFile(file, { state: { mode: "preview" } });
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		this.enforceMillerPaneMaxWidthSoon();
 		this.rememberMillerPaneWidthSoon();
 	}
 
@@ -539,12 +540,15 @@ class MillerColumnsView extends ItemView {
 			this.plugin.maxMillerPaneWidth()
 		);
 		if (!width) return;
-		window.requestAnimationFrame(() => {
-			const el = this.millerPaneEl();
-			if (!el) return;
-			el.style.width = `${width}px`;
-			el.style.flexBasis = `${width}px`;
-		});
+		const el = this.millerPaneEl();
+		if (!el) return;
+		this.applyMillerPaneWidth(el, width);
+	}
+
+	private restoreMillerPaneWidthSoon(): void {
+		for (const delay of [0, 50, 150]) {
+			window.setTimeout(() => this.restoreMillerPaneWidth(), delay);
+		}
 	}
 
 	private enforceMillerPaneMaxWidth(): void {
@@ -553,9 +557,24 @@ class MillerColumnsView extends ItemView {
 		const maxWidth = this.plugin.maxMillerPaneWidth();
 		const currentWidth = el.getBoundingClientRect().width;
 		if (currentWidth > maxWidth) {
-			el.style.width = `${maxWidth}px`;
-			el.style.flexBasis = `${maxWidth}px`;
+			this.applyMillerPaneWidth(el, maxWidth);
 		}
+	}
+
+	private enforceMillerPaneMaxWidthSoon(): void {
+		window.requestAnimationFrame(() => this.enforceMillerPaneMaxWidth());
+		for (const delay of [50, 150]) {
+			window.setTimeout(() => this.enforceMillerPaneMaxWidth(), delay);
+		}
+	}
+
+	private applyMillerPaneWidth(el: HTMLElement, width: number): void {
+		const px = `${width}px`;
+		el.style.width = px;
+		el.style.maxWidth = px;
+		el.style.flexBasis = px;
+		el.style.flexGrow = "0";
+		el.style.flexShrink = "0";
 	}
 
 	private isLeafAttached(target: WorkspaceLeaf): boolean {
