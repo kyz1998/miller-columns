@@ -74,7 +74,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.activeColumn = 0;
     this.columns = [];
     this.pageLeaf = null;
-    this.previewLeaf = null;
+    this.millerPaneWidth = null;
     this.affected = /* @__PURE__ */ new Set();
     this.refreshQueued = false;
     this.navigation = false;
@@ -107,6 +107,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
         void this.plugin.moveAppearance(oldPath, file.path);
         this.queueRefresh([REFRESH_ALL]);
       })
+    );
+    this.registerEvent(
+      this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
     );
     this.buildColumnsFrom(0);
   }
@@ -430,12 +433,12 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     }
   }
   async openPageFile(file) {
+    const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
     const leaf = this.rightPageLeaf();
-    await leaf.openFile(file);
-    const previewLeaf = this.rightPreviewLeaf(leaf);
-    await previewLeaf.openFile(file, { active: false, state: { mode: "preview" } });
-    previewLeaf.setGroupMember(leaf);
+    if (!hadPageLeaf) this.restoreMillerPaneWidth();
+    await leaf.openFile(file, { state: { mode: "preview" } });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.rememberMillerPaneWidthSoon();
   }
   rightPageLeaf() {
     if (this.pageLeaf && this.isLeafAttached(this.pageLeaf)) return this.pageLeaf;
@@ -443,11 +446,28 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
     return this.pageLeaf;
   }
-  rightPreviewLeaf(sourceLeaf) {
-    if (this.previewLeaf && this.isLeafAttached(this.previewLeaf)) return this.previewLeaf;
-    this.app.workspace.setActiveLeaf(sourceLeaf, { focus: false });
-    this.previewLeaf = this.app.workspace.getLeaf("split", "vertical");
-    return this.previewLeaf;
+  millerPaneEl() {
+    var _a;
+    return (_a = this.containerEl.closest(".workspace-tabs")) != null ? _a : this.containerEl.closest(".workspace-leaf");
+  }
+  rememberMillerPaneWidth() {
+    var _a;
+    if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
+    const width = (_a = this.millerPaneEl()) == null ? void 0 : _a.getBoundingClientRect().width;
+    if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
+  }
+  rememberMillerPaneWidthSoon() {
+    window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
+  }
+  restoreMillerPaneWidth() {
+    const width = this.millerPaneWidth;
+    if (!width) return;
+    window.requestAnimationFrame(() => {
+      const el = this.millerPaneEl();
+      if (!el) return;
+      el.style.width = `${width}px`;
+      el.style.flexBasis = `${width}px`;
+    });
   }
   isLeafAttached(target) {
     let found = false;

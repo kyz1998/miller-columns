@@ -87,7 +87,7 @@ class MillerColumnsView extends ItemView {
 	private columns: Column[] = [];
 	private columnsEl: HTMLElement;
 	private pageLeaf: WorkspaceLeaf | null = null;
-	private previewLeaf: WorkspaceLeaf | null = null;
+	private millerPaneWidth: number | null = null;
 	private affected = new Set<string>();
 	private refreshQueued = false;
 
@@ -129,6 +129,9 @@ class MillerColumnsView extends ItemView {
 				void this.plugin.moveAppearance(oldPath, file.path);
 				this.queueRefresh([REFRESH_ALL]);
 			})
+		);
+		this.registerEvent(
+			this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
 		);
 
 		this.buildColumnsFrom(0);
@@ -491,12 +494,12 @@ class MillerColumnsView extends ItemView {
 	}
 
 	private async openPageFile(file: TFile): Promise<void> {
+		const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
 		const leaf = this.rightPageLeaf();
-		await leaf.openFile(file);
-		const previewLeaf = this.rightPreviewLeaf(leaf);
-		await previewLeaf.openFile(file, { active: false, state: { mode: "preview" } });
-		previewLeaf.setGroupMember(leaf);
+		if (!hadPageLeaf) this.restoreMillerPaneWidth();
+		await leaf.openFile(file, { state: { mode: "preview" } });
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		this.rememberMillerPaneWidthSoon();
 	}
 
 	private rightPageLeaf(): WorkspaceLeaf {
@@ -506,11 +509,32 @@ class MillerColumnsView extends ItemView {
 		return this.pageLeaf;
 	}
 
-	private rightPreviewLeaf(sourceLeaf: WorkspaceLeaf): WorkspaceLeaf {
-		if (this.previewLeaf && this.isLeafAttached(this.previewLeaf)) return this.previewLeaf;
-		this.app.workspace.setActiveLeaf(sourceLeaf, { focus: false });
-		this.previewLeaf = this.app.workspace.getLeaf("split", "vertical");
-		return this.previewLeaf;
+	private millerPaneEl(): HTMLElement | null {
+		return (
+			this.containerEl.closest<HTMLElement>(".workspace-tabs") ??
+			this.containerEl.closest<HTMLElement>(".workspace-leaf")
+		);
+	}
+
+	private rememberMillerPaneWidth(): void {
+		if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
+		const width = this.millerPaneEl()?.getBoundingClientRect().width;
+		if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
+	}
+
+	private rememberMillerPaneWidthSoon(): void {
+		window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
+	}
+
+	private restoreMillerPaneWidth(): void {
+		const width = this.millerPaneWidth;
+		if (!width) return;
+		window.requestAnimationFrame(() => {
+			const el = this.millerPaneEl();
+			if (!el) return;
+			el.style.width = `${width}px`;
+			el.style.flexBasis = `${width}px`;
+		});
 	}
 
 	private isLeafAttached(target: WorkspaceLeaf): boolean {
