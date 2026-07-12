@@ -38,9 +38,12 @@ var SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
 var MIN_COLUMN_WIDTH = 64;
 var COMPACT_COLUMN_WIDTH = 96;
 var MAX_COLUMN_WIDTH = 520;
+var MIN_MAX_PANE_COLUMNS = 1;
+var MAX_MAX_PANE_COLUMNS = 6;
 var DEFAULT_SETTINGS = {
   columnWidth: 220,
   columnWidths: [],
+  maxPaneColumns: 3,
   appearances: {}
 };
 var DEFAULT_PAGE_ICON = "file-text";
@@ -109,7 +112,10 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       })
     );
     this.registerEvent(
-      this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
+      this.app.workspace.on("resize", () => {
+        this.enforceMillerPaneMaxWidth();
+        this.rememberMillerPaneWidth();
+      })
     );
     this.buildColumnsFrom(0);
   }
@@ -123,6 +129,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       `${this.plugin.settings.columnWidth}px`
     );
     this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
+    this.enforceMillerPaneMaxWidth();
   }
   // ---------------------------------------------------------------- columns
   /** Number of columns implied by the current selection (root + one per selected folder). */
@@ -243,10 +250,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const displayName = item instanceof import_obsidian.TFile && item.extension === "md" ? item.basename : item.name;
     row.createSpan({ cls: "mc-name", text: displayName });
     if (item instanceof import_obsidian.TFolder) {
-      row.createSpan({
-        cls: "mc-count",
-        text: String(this.visibleChildren(item).length)
-      });
       row.createSpan({ cls: "mc-chevron", text: "\u203A" });
     }
     row.addEventListener("click", () => {
@@ -434,6 +437,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   }
   async openPageFile(file) {
     const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
+    if (!hadPageLeaf) this.enforceMillerPaneMaxWidth();
     const leaf = this.rightPageLeaf();
     if (!hadPageLeaf) this.restoreMillerPaneWidth();
     await leaf.openFile(file, { state: { mode: "preview" } });
@@ -454,13 +458,19 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     var _a;
     if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
     const width = (_a = this.millerPaneEl()) == null ? void 0 : _a.getBoundingClientRect().width;
-    if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
+    if (width && Number.isFinite(width)) {
+      this.millerPaneWidth = Math.min(Math.round(width), this.plugin.maxMillerPaneWidth());
+    }
   }
   rememberMillerPaneWidthSoon() {
     window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
   }
   restoreMillerPaneWidth() {
-    const width = this.millerPaneWidth;
+    var _a;
+    const width = Math.min(
+      (_a = this.millerPaneWidth) != null ? _a : this.plugin.maxMillerPaneWidth(),
+      this.plugin.maxMillerPaneWidth()
+    );
     if (!width) return;
     window.requestAnimationFrame(() => {
       const el = this.millerPaneEl();
@@ -468,6 +478,16 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       el.style.width = `${width}px`;
       el.style.flexBasis = `${width}px`;
     });
+  }
+  enforceMillerPaneMaxWidth() {
+    const el = this.millerPaneEl();
+    if (!el) return;
+    const maxWidth = this.plugin.maxMillerPaneWidth();
+    const currentWidth = el.getBoundingClientRect().width;
+    if (currentWidth > maxWidth) {
+      el.style.width = `${maxWidth}px`;
+      el.style.flexBasis = `${maxWidth}px`;
+    }
   }
   isLeafAttached(target) {
     let found = false;
@@ -818,6 +838,7 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
     this.settings.columnWidths = this.settings.columnWidths.map(
       (width) => typeof width === "number" ? this.clampColumnWidth(width) : null
     );
+    this.settings.maxPaneColumns = this.clampMaxPaneColumns(this.settings.maxPaneColumns);
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -837,6 +858,9 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
   }
   resetColumnWidth(index) {
     this.settings.columnWidths[index] = null;
+  }
+  maxMillerPaneWidth() {
+    return this.settings.columnWidth * this.settings.maxPaneColumns;
   }
   appearanceFor(path) {
     var _a;
@@ -865,6 +889,13 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
   clampColumnWidth(width) {
     if (!Number.isFinite(width)) return DEFAULT_SETTINGS.columnWidth;
     return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.round(width)));
+  }
+  clampMaxPaneColumns(columns) {
+    if (!Number.isFinite(columns)) return DEFAULT_SETTINGS.maxPaneColumns;
+    return Math.min(
+      MAX_MAX_PANE_COLUMNS,
+      Math.max(MIN_MAX_PANE_COLUMNS, Math.round(columns))
+    );
   }
   async activateView() {
     var _a;
@@ -901,6 +932,18 @@ var MillerColumnsSettingTab = class extends import_obsidian.PluginSettingTab {
       (button) => button.setButtonText("Reset all").onClick(async () => {
         this.plugin.settings.columnWidths = [];
         await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Maximum Miller pane width").setDesc("Limits the workspace pane to this many default-width columns when a page pane is opened.").addSlider(
+      (slider) => slider.setLimits(MIN_MAX_PANE_COLUMNS, MAX_MAX_PANE_COLUMNS, 1).setValue(this.plugin.settings.maxPaneColumns).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.maxPaneColumns = value;
+        await this.plugin.saveSettings();
+      })
+    ).addExtraButton(
+      (button) => button.setIcon("reset").setTooltip("Reset to default").onClick(async () => {
+        this.plugin.settings.maxPaneColumns = DEFAULT_SETTINGS.maxPaneColumns;
+        await this.plugin.saveSettings();
+        this.display();
       })
     );
   }
