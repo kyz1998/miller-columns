@@ -243,10 +243,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const displayName = item instanceof import_obsidian.TFile && item.extension === "md" ? item.basename : item.name;
     row.createSpan({ cls: "mc-name", text: displayName });
     if (item instanceof import_obsidian.TFolder) {
-      row.createSpan({
-        cls: "mc-count",
-        text: String(this.visibleChildren(item).length)
-      });
       row.createSpan({ cls: "mc-chevron", text: "\u203A" });
     }
     row.addEventListener("click", () => {

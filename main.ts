@@ -283,10 +283,6 @@ class MillerColumnsView extends ItemView {
 		row.createSpan({ cls: "mc-name", text: displayName });
 
 		if (item instanceof TFolder) {
-			row.createSpan({
-				cls: "mc-count",
-				text: String(this.visibleChildren(item).length),
-			});
 			row.createSpan({ cls: "mc-chevron", text: "›" });
 		}
 
@@ -438,7 +434,7 @@ class MillerColumnsView extends ItemView {
 
 	private parentsOf(path: string): string[] {
 		const parent = parentPathOf(path);
-		// The grandparent column shows the parent's item-count badge, so refresh it too.
+		// The grandparent column may need to refresh its child-folder row.
 		return [parent, parentPathOf(parent)];
 	}
 
