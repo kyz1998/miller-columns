@@ -87,6 +87,7 @@ class MillerColumnsView extends ItemView {
 	private columns: Column[] = [];
 	private columnsEl: HTMLElement;
 	private pageLeaf: WorkspaceLeaf | null = null;
+	private millerPaneWidth: number | null = null;
 	private affected = new Set<string>();
 	private refreshQueued = false;
 
@@ -111,7 +112,6 @@ class MillerColumnsView extends ItemView {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("miller-columns");
-		this.clearLegacyPaneSizing();
 		this.applySettings();
 
 		this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
@@ -130,6 +130,10 @@ class MillerColumnsView extends ItemView {
 				this.queueRefresh([REFRESH_ALL]);
 			})
 		);
+		this.registerEvent(
+			this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
+		);
+
 		this.buildColumnsFrom(0);
 	}
 
@@ -139,7 +143,6 @@ class MillerColumnsView extends ItemView {
 	}
 
 	applySettings(): void {
-		this.clearLegacyPaneSizing();
 		this.contentEl.style.setProperty(
 			"--mc-column-width",
 			`${this.plugin.settings.columnWidth}px`
@@ -280,6 +283,10 @@ class MillerColumnsView extends ItemView {
 		row.createSpan({ cls: "mc-name", text: displayName });
 
 		if (item instanceof TFolder) {
+			row.createSpan({
+				cls: "mc-count",
+				text: String(this.visibleChildren(item).length),
+			});
 			row.createSpan({ cls: "mc-chevron", text: "›" });
 		}
 
@@ -431,7 +438,7 @@ class MillerColumnsView extends ItemView {
 
 	private parentsOf(path: string): string[] {
 		const parent = parentPathOf(path);
-		// The grandparent column may need to refresh its child-folder row.
+		// The grandparent column shows the parent's item-count badge, so refresh it too.
 		return [parent, parentPathOf(parent)];
 	}
 
@@ -487,10 +494,12 @@ class MillerColumnsView extends ItemView {
 	}
 
 	private async openPageFile(file: TFile): Promise<void> {
-		this.clearLegacyPaneSizing();
+		const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
 		const leaf = this.rightPageLeaf();
+		if (!hadPageLeaf) this.restoreMillerPaneWidth();
 		await leaf.openFile(file, { state: { mode: "preview" } });
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		this.rememberMillerPaneWidthSoon();
 	}
 
 	private rightPageLeaf(): WorkspaceLeaf {
@@ -500,16 +509,32 @@ class MillerColumnsView extends ItemView {
 		return this.pageLeaf;
 	}
 
-	private clearLegacyPaneSizing(): void {
-		const el =
+	private millerPaneEl(): HTMLElement | null {
+		return (
 			this.containerEl.closest<HTMLElement>(".workspace-tabs") ??
-			this.containerEl.closest<HTMLElement>(".workspace-leaf");
-		if (!el) return;
-		el.style.width = "";
-		el.style.maxWidth = "";
-		el.style.flexBasis = "";
-		el.style.flexGrow = "";
-		el.style.flexShrink = "";
+			this.containerEl.closest<HTMLElement>(".workspace-leaf")
+		);
+	}
+
+	private rememberMillerPaneWidth(): void {
+		if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
+		const width = this.millerPaneEl()?.getBoundingClientRect().width;
+		if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
+	}
+
+	private rememberMillerPaneWidthSoon(): void {
+		window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
+	}
+
+	private restoreMillerPaneWidth(): void {
+		const width = this.millerPaneWidth;
+		if (!width) return;
+		window.requestAnimationFrame(() => {
+			const el = this.millerPaneEl();
+			if (!el) return;
+			el.style.width = `${width}px`;
+			el.style.flexBasis = `${width}px`;
+		});
 	}
 
 	private isLeafAttached(target: WorkspaceLeaf): boolean {
@@ -1019,6 +1044,5 @@ class MillerColumnsSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
-
 	}
 }

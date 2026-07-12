@@ -74,6 +74,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.activeColumn = 0;
     this.columns = [];
     this.pageLeaf = null;
+    this.millerPaneWidth = null;
     this.affected = /* @__PURE__ */ new Set();
     this.refreshQueued = false;
     this.navigation = false;
@@ -91,7 +92,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("miller-columns");
-    this.clearLegacyPaneSizing();
     this.applySettings();
     this.columnsEl = contentEl.createDiv({ cls: "mc-columns" });
     this.columnsEl.setAttr("tabindex", "0");
@@ -108,6 +108,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
         this.queueRefresh([REFRESH_ALL]);
       })
     );
+    this.registerEvent(
+      this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
+    );
     this.buildColumnsFrom(0);
   }
   async onClose() {
@@ -115,7 +118,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.contentEl.empty();
   }
   applySettings() {
-    this.clearLegacyPaneSizing();
     this.contentEl.style.setProperty(
       "--mc-column-width",
       `${this.plugin.settings.columnWidth}px`
@@ -241,6 +243,10 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const displayName = item instanceof import_obsidian.TFile && item.extension === "md" ? item.basename : item.name;
     row.createSpan({ cls: "mc-name", text: displayName });
     if (item instanceof import_obsidian.TFolder) {
+      row.createSpan({
+        cls: "mc-count",
+        text: String(this.visibleChildren(item).length)
+      });
       row.createSpan({ cls: "mc-chevron", text: "\u203A" });
     }
     row.addEventListener("click", () => {
@@ -427,10 +433,12 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     }
   }
   async openPageFile(file) {
-    this.clearLegacyPaneSizing();
+    const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
     const leaf = this.rightPageLeaf();
+    if (!hadPageLeaf) this.restoreMillerPaneWidth();
     await leaf.openFile(file, { state: { mode: "preview" } });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.rememberMillerPaneWidthSoon();
   }
   rightPageLeaf() {
     if (this.pageLeaf && this.isLeafAttached(this.pageLeaf)) return this.pageLeaf;
@@ -438,15 +446,28 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
     return this.pageLeaf;
   }
-  clearLegacyPaneSizing() {
+  millerPaneEl() {
     var _a;
-    const el = (_a = this.containerEl.closest(".workspace-tabs")) != null ? _a : this.containerEl.closest(".workspace-leaf");
-    if (!el) return;
-    el.style.width = "";
-    el.style.maxWidth = "";
-    el.style.flexBasis = "";
-    el.style.flexGrow = "";
-    el.style.flexShrink = "";
+    return (_a = this.containerEl.closest(".workspace-tabs")) != null ? _a : this.containerEl.closest(".workspace-leaf");
+  }
+  rememberMillerPaneWidth() {
+    var _a;
+    if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
+    const width = (_a = this.millerPaneEl()) == null ? void 0 : _a.getBoundingClientRect().width;
+    if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
+  }
+  rememberMillerPaneWidthSoon() {
+    window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
+  }
+  restoreMillerPaneWidth() {
+    const width = this.millerPaneWidth;
+    if (!width) return;
+    window.requestAnimationFrame(() => {
+      const el = this.millerPaneEl();
+      if (!el) return;
+      el.style.width = `${width}px`;
+      el.style.flexBasis = `${width}px`;
+    });
   }
   isLeafAttached(target) {
     let found = false;
