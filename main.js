@@ -65,6 +65,29 @@ function markdownLinkPath(file) {
 function markdownPageLink(file) {
   return `[[${markdownLinkPath(file)}|${file.basename}]]`;
 }
+function normalizeTag(tag) {
+  return tag.trim().replace(/^#+/, "");
+}
+function parseTagInput(value) {
+  const tags = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const part of value.split(/[,\s]+/)) {
+    const tag = normalizeTag(part);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    tags.push(tag);
+  }
+  return tags;
+}
+function frontmatterTags(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((tag) => frontmatterTags(tag));
+  }
+  if (typeof value === "string") {
+    return parseTagInput(value);
+  }
+  return [];
+}
 var MillerColumnsView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -552,6 +575,9 @@ ${body}${SUBPAGE_BLOCK_END}`;
     menu.addItem(
       (mi) => mi.setTitle("Icon and color").setIcon("palette").onClick(() => new AppearanceModal(this.app, this.plugin, item, () => this.refreshPath(item)).open())
     );
+    menu.addItem(
+      (mi) => mi.setTitle("Tags").setIcon("tags").onClick(() => void this.openTagsModal(item))
+    );
     menu.addSeparator();
     menu.addItem(
       (mi) => mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
@@ -567,6 +593,26 @@ ${body}${SUBPAGE_BLOCK_END}`;
       })
     );
     menu.showAtMouseEvent(e);
+  }
+  async openTagsModal(item) {
+    const file = await this.pageFileForTags(item);
+    if (!file) return;
+    new TagsModal(this.app, file).open();
+  }
+  async pageFileForTags(item) {
+    if (item instanceof import_obsidian.TFile) {
+      if (item.extension === "md") return item;
+      new import_obsidian.Notice("Tags can only be edited on Markdown pages.");
+      return null;
+    }
+    if (item instanceof import_obsidian.TFolder) {
+      try {
+        return await this.ensureFolderPage(item);
+      } catch (e) {
+        new import_obsidian.Notice("Could not open page tags: " + errorMessage(e));
+      }
+    }
+    return null;
   }
   refreshPath(item) {
     var _a;
@@ -698,6 +744,46 @@ var RenameModal = class extends import_obsidian.Modal {
     if (!(oldPage instanceof import_obsidian.TFile)) return;
     if (this.app.vault.getAbstractFileByPath(newPagePath)) return;
     await this.app.fileManager.renameFile(oldPage, newPagePath);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var TagsModal = class extends import_obsidian.Modal {
+  constructor(app, file) {
+    super(app);
+    this.file = file;
+  }
+  onOpen() {
+    var _a, _b;
+    this.titleEl.setText("Tags");
+    const current = frontmatterTags(
+      (_b = (_a = this.app.metadataCache.getFileCache(this.file)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.tags
+    );
+    const input = this.contentEl.createEl("textarea", {
+      cls: "mc-tags-input",
+      text: current.join("\n")
+    });
+    input.setAttr("placeholder", "project/client-a\nstatus/active");
+    new import_obsidian.Setting(this.contentEl).setDesc("One tag per line. Tags are saved to standard Obsidian frontmatter.").addButton(
+      (btn) => btn.setButtonText("Save").setCta().onClick(() => void this.submit(input.value))
+    );
+    input.focus();
+  }
+  async submit(value) {
+    const tags = parseTagInput(value);
+    try {
+      await this.app.fileManager.processFrontMatter(this.file, (frontmatter) => {
+        if (tags.length > 0) {
+          frontmatter.tags = tags;
+        } else {
+          delete frontmatter.tags;
+        }
+      });
+      this.close();
+    } catch (e) {
+      new import_obsidian.Notice("Could not update tags: " + errorMessage(e));
+    }
   }
   onClose() {
     this.contentEl.empty();
@@ -867,7 +953,11 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
     const { workspace } = this.app;
     let leaf = (_a = workspace.getLeavesOfType(VIEW_TYPE_MILLER)[0]) != null ? _a : null;
     if (!leaf) {
-      leaf = workspace.getLeaf(true);
+      leaf = workspace.getLeftLeaf(false);
+      if (!leaf) {
+        new import_obsidian.Notice("Could not open Miller Columns in the left sidebar.");
+        return;
+      }
       await leaf.setViewState({ type: VIEW_TYPE_MILLER, active: true });
     }
     await workspace.revealLeaf(leaf);

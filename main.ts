@@ -64,6 +64,32 @@ function markdownPageLink(file: TFile): string {
 	return `[[${markdownLinkPath(file)}|${file.basename}]]`;
 }
 
+function normalizeTag(tag: string): string {
+	return tag.trim().replace(/^#+/, "");
+}
+
+function parseTagInput(value: string): string[] {
+	const tags: string[] = [];
+	const seen = new Set<string>();
+	for (const part of value.split(/[,\s]+/)) {
+		const tag = normalizeTag(part);
+		if (!tag || seen.has(tag)) continue;
+		seen.add(tag);
+		tags.push(tag);
+	}
+	return tags;
+}
+
+function frontmatterTags(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return value.flatMap((tag) => frontmatterTags(tag));
+	}
+	if (typeof value === "string") {
+		return parseTagInput(value);
+	}
+	return [];
+}
+
 interface Column {
 	folder: TFolder;
 	el: HTMLElement;
@@ -628,6 +654,12 @@ class MillerColumnsView extends ItemView {
 				.setIcon("palette")
 				.onClick(() => new AppearanceModal(this.app, this.plugin, item, () => this.refreshPath(item)).open())
 		);
+		menu.addItem((mi) =>
+			mi
+				.setTitle("Tags")
+				.setIcon("tags")
+				.onClick(() => void this.openTagsModal(item))
+		);
 		menu.addSeparator();
 		menu.addItem((mi) =>
 			mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
@@ -643,6 +675,28 @@ class MillerColumnsView extends ItemView {
 			})
 		);
 		menu.showAtMouseEvent(e);
+	}
+
+	private async openTagsModal(item: TAbstractFile): Promise<void> {
+		const file = await this.pageFileForTags(item);
+		if (!file) return;
+		new TagsModal(this.app, file).open();
+	}
+
+	private async pageFileForTags(item: TAbstractFile): Promise<TFile | null> {
+		if (item instanceof TFile) {
+			if (item.extension === "md") return item;
+			new Notice("Tags can only be edited on Markdown pages.");
+			return null;
+		}
+		if (item instanceof TFolder) {
+			try {
+				return await this.ensureFolderPage(item);
+			} catch (e) {
+				new Notice("Could not open page tags: " + errorMessage(e));
+			}
+		}
+		return null;
 	}
 
 	private refreshPath(item: TAbstractFile): void {
@@ -786,6 +840,52 @@ class RenameModal extends Modal {
 		if (!(oldPage instanceof TFile)) return;
 		if (this.app.vault.getAbstractFileByPath(newPagePath)) return;
 		await this.app.fileManager.renameFile(oldPage, newPagePath);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+class TagsModal extends Modal {
+	constructor(app: App, private readonly file: TFile) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.titleEl.setText("Tags");
+		const current = frontmatterTags(
+			this.app.metadataCache.getFileCache(this.file)?.frontmatter?.tags
+		);
+		const input = this.contentEl.createEl("textarea", {
+			cls: "mc-tags-input",
+			text: current.join("\n"),
+		});
+		input.setAttr("placeholder", "project/client-a\nstatus/active");
+
+		new Setting(this.contentEl)
+			.setDesc("One tag per line. Tags are saved to standard Obsidian frontmatter.")
+			.addButton((btn) =>
+				btn.setButtonText("Save").setCta().onClick(() => void this.submit(input.value))
+			);
+
+		input.focus();
+	}
+
+	private async submit(value: string): Promise<void> {
+		const tags = parseTagInput(value);
+		try {
+			await this.app.fileManager.processFrontMatter(this.file, (frontmatter) => {
+				if (tags.length > 0) {
+					frontmatter.tags = tags;
+				} else {
+					delete frontmatter.tags;
+				}
+			});
+			this.close();
+		} catch (e) {
+			new Notice("Could not update tags: " + errorMessage(e));
+		}
 	}
 
 	onClose(): void {
@@ -989,9 +1089,13 @@ export default class MillerColumnsPlugin extends Plugin {
 
 	private async activateView(): Promise<void> {
 		const { workspace } = this.app;
-		let leaf = workspace.getLeavesOfType(VIEW_TYPE_MILLER)[0] ?? null;
+		let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(VIEW_TYPE_MILLER)[0] ?? null;
 		if (!leaf) {
-			leaf = workspace.getLeaf(true);
+			leaf = workspace.getLeftLeaf(false);
+			if (!leaf) {
+				new Notice("Could not open Miller Columns in the left sidebar.");
+				return;
+			}
 			await leaf.setViewState({ type: VIEW_TYPE_MILLER, active: true });
 		}
 		await workspace.revealLeaf(leaf);
