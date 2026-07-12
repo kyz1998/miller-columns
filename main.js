@@ -35,7 +35,7 @@ var ICON_SVG = '<rect x="10" y="18" width="80" height="64" rx="8" fill="none" st
 var REFRESH_ALL = "*";
 var SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 var SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
-var MIN_COLUMN_WIDTH = 96;
+var MIN_COLUMN_WIDTH = 64;
 var MAX_COLUMN_WIDTH = 520;
 var DEFAULT_SETTINGS = {
   columnWidth: 220,

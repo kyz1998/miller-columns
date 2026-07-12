@@ -28,7 +28,7 @@ const ICON_SVG =
 const REFRESH_ALL = "*";
 const SUBPAGE_BLOCK_START = "<!-- miller-columns-subpages:start -->";
 const SUBPAGE_BLOCK_END = "<!-- miller-columns-subpages:end -->";
-const MIN_COLUMN_WIDTH = 96;
+const MIN_COLUMN_WIDTH = 64;
 const MAX_COLUMN_WIDTH = 520;
 const DEFAULT_SETTINGS: MillerColumnsSettings = {
 	columnWidth: 220,
