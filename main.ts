@@ -112,8 +112,6 @@ class MillerColumnsView extends ItemView {
 	private activeColumn = 0;
 	private columns: Column[] = [];
 	private columnsEl: HTMLElement;
-	private pageLeaf: WorkspaceLeaf | null = null;
-	private millerPaneWidth: number | null = null;
 	private affected = new Set<string>();
 	private refreshQueued = false;
 
@@ -156,10 +154,6 @@ class MillerColumnsView extends ItemView {
 				this.queueRefresh([REFRESH_ALL]);
 			})
 		);
-		this.registerEvent(
-			this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
-		);
-
 		this.buildColumnsFrom(0);
 	}
 
@@ -516,55 +510,9 @@ class MillerColumnsView extends ItemView {
 	}
 
 	private async openPageFile(file: TFile): Promise<void> {
-		const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
-		const leaf = this.rightPageLeaf();
-		if (!hadPageLeaf) this.restoreMillerPaneWidth();
+		const leaf = this.app.workspace.getLeaf(false);
 		await leaf.openFile(file, { state: { mode: "preview" } });
 		this.app.workspace.setActiveLeaf(leaf, { focus: true });
-		this.rememberMillerPaneWidthSoon();
-	}
-
-	private rightPageLeaf(): WorkspaceLeaf {
-		if (this.pageLeaf && this.isLeafAttached(this.pageLeaf)) return this.pageLeaf;
-		this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
-		this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
-		return this.pageLeaf;
-	}
-
-	private millerPaneEl(): HTMLElement | null {
-		return (
-			this.containerEl.closest<HTMLElement>(".workspace-tabs") ??
-			this.containerEl.closest<HTMLElement>(".workspace-leaf")
-		);
-	}
-
-	private rememberMillerPaneWidth(): void {
-		if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
-		const width = this.millerPaneEl()?.getBoundingClientRect().width;
-		if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
-	}
-
-	private rememberMillerPaneWidthSoon(): void {
-		window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
-	}
-
-	private restoreMillerPaneWidth(): void {
-		const width = this.millerPaneWidth;
-		if (!width) return;
-		window.requestAnimationFrame(() => {
-			const el = this.millerPaneEl();
-			if (!el) return;
-			el.style.width = `${width}px`;
-			el.style.flexBasis = `${width}px`;
-		});
-	}
-
-	private isLeafAttached(target: WorkspaceLeaf): boolean {
-		let found = false;
-		this.app.workspace.iterateAllLeaves((leaf) => {
-			if (leaf === target) found = true;
-		});
-		return found;
 	}
 
 	private async ensureFolderPage(folder: TFolder): Promise<TFile | null> {

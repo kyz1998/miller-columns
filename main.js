@@ -96,8 +96,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.selection = [];
     this.activeColumn = 0;
     this.columns = [];
-    this.pageLeaf = null;
-    this.millerPaneWidth = null;
     this.affected = /* @__PURE__ */ new Set();
     this.refreshQueued = false;
     this.navigation = false;
@@ -130,9 +128,6 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
         void this.plugin.moveAppearance(oldPath, file.path);
         this.queueRefresh([REFRESH_ALL]);
       })
-    );
-    this.registerEvent(
-      this.app.workspace.on("resize", () => this.rememberMillerPaneWidth())
     );
     this.buildColumnsFrom(0);
   }
@@ -452,48 +447,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     }
   }
   async openPageFile(file) {
-    const hadPageLeaf = this.pageLeaf !== null && this.isLeafAttached(this.pageLeaf);
-    const leaf = this.rightPageLeaf();
-    if (!hadPageLeaf) this.restoreMillerPaneWidth();
+    const leaf = this.app.workspace.getLeaf(false);
     await leaf.openFile(file, { state: { mode: "preview" } });
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    this.rememberMillerPaneWidthSoon();
-  }
-  rightPageLeaf() {
-    if (this.pageLeaf && this.isLeafAttached(this.pageLeaf)) return this.pageLeaf;
-    this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
-    this.pageLeaf = this.app.workspace.getLeaf("split", "vertical");
-    return this.pageLeaf;
-  }
-  millerPaneEl() {
-    var _a;
-    return (_a = this.containerEl.closest(".workspace-tabs")) != null ? _a : this.containerEl.closest(".workspace-leaf");
-  }
-  rememberMillerPaneWidth() {
-    var _a;
-    if (!this.pageLeaf || !this.isLeafAttached(this.pageLeaf)) return;
-    const width = (_a = this.millerPaneEl()) == null ? void 0 : _a.getBoundingClientRect().width;
-    if (width && Number.isFinite(width)) this.millerPaneWidth = Math.round(width);
-  }
-  rememberMillerPaneWidthSoon() {
-    window.requestAnimationFrame(() => this.rememberMillerPaneWidth());
-  }
-  restoreMillerPaneWidth() {
-    const width = this.millerPaneWidth;
-    if (!width) return;
-    window.requestAnimationFrame(() => {
-      const el = this.millerPaneEl();
-      if (!el) return;
-      el.style.width = `${width}px`;
-      el.style.flexBasis = `${width}px`;
-    });
-  }
-  isLeafAttached(target) {
-    let found = false;
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      if (leaf === target) found = true;
-    });
-    return found;
   }
   async ensureFolderPage(folder) {
     const path = this.folderPagePath(folder);
