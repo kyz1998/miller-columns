@@ -531,8 +531,13 @@ class MillerColumnsView extends ItemView {
 	private async syncFolderPage(folder: TFolder, knownPage?: TFile | null): Promise<void> {
 		if (folder.isRoot()) return;
 		try {
-			const page = knownPage ?? (await this.ensureFolderPage(folder));
-			if (!page) return;
+			const pagePath = this.folderPagePath(folder);
+			const existing = pagePath ? this.app.vault.getAbstractFileByPath(pagePath) : null;
+			const page = knownPage ?? (existing instanceof TFile ? existing : null);
+			// Background refresh must never create a missing companion page. During a
+			// folder rename, creation here can race the companion rename and strand the
+			// original page under its old name.
+			if (!(page instanceof TFile)) return;
 			const block = this.subpageBlock(folder);
 			const raw = await this.app.vault.read(page);
 			const current = this.stripGeneratedTitle(raw, folder);
@@ -611,7 +616,10 @@ class MillerColumnsView extends ItemView {
 		);
 		menu.addSeparator();
 		menu.addItem((mi) =>
-			mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
+			mi
+				.setTitle("Rename")
+				.setIcon("pencil")
+				.onClick(() => new RenameModal(this.app, this.plugin, item).open())
 		);
 		menu.addSeparator();
 		menu.addItem((mi) =>
@@ -728,7 +736,11 @@ class MillerColumnsView extends ItemView {
 }
 
 class RenameModal extends Modal {
-	constructor(app: App, private readonly item: TAbstractFile) {
+	constructor(
+		app: App,
+		private readonly plugin: MillerColumnsPlugin,
+		private readonly item: TAbstractFile
+	) {
 		super(app);
 	}
 
@@ -766,7 +778,7 @@ class RenameModal extends Modal {
 		const prefix = parent && !parent.isRoot() ? parent.path + "/" : "";
 		const destination = normalizePath(prefix + name);
 		try {
-			await this.app.fileManager.renameFile(this.item, destination);
+			await this.plugin.renameItem(this.item, destination);
 			this.close();
 		} catch (e) {
 			new Notice("Rename failed: " + errorMessage(e));
@@ -1021,6 +1033,63 @@ export default class MillerColumnsPlugin extends Plugin {
 		await this.saveSettings();
 	}
 
+	renameItem(item: TAbstractFile, destination: string): Promise<void> {
+		if (!(item instanceof TFolder)) {
+			return this.app.fileManager.renameFile(item, destination);
+		}
+
+		const oldPath = item.path;
+		const key = `${oldPath}\n${destination}`;
+		const existing = this.renameOperations.get(key);
+		if (existing) return existing;
+
+		let resolveOperation: () => void;
+		let rejectOperation: (reason: unknown) => void;
+		const operation = new Promise<void>((resolve, reject) => {
+			resolveOperation = resolve;
+			rejectOperation = reject;
+		});
+		this.renameOperations.set(key, operation);
+		void this.performFolderRename(item, oldPath, destination).then(
+			resolveOperation!,
+			rejectOperation!
+		);
+		this.removeRenameOperationWhenSettled(key, operation);
+		return operation;
+	}
+
+	private async performFolderRename(
+		folder: TFolder,
+		oldPath: string,
+		destination: string
+	): Promise<void> {
+		const oldFolderName = folder.name;
+		const newFolderName = destination.substring(destination.lastIndexOf("/") + 1);
+		const oldPageName = `${oldFolderName}.md`;
+		const newPageName = `${newFolderName}.md`;
+		const companion = folder.children.find(
+			(child): child is TFile => child instanceof TFile && child.name === oldPageName
+		);
+
+		if (companion && oldPageName !== newPageName) {
+			const conflict = folder.children.find(
+				(child) => child !== companion && child.name === newPageName
+			);
+			if (conflict) {
+				throw new Error(`Could not rename attached page because ${newPageName} already exists.`);
+			}
+		}
+
+		await this.app.fileManager.renameFile(folder, destination);
+		if (companion && oldPageName !== newPageName) {
+			await this.app.fileManager.renameFile(
+				companion,
+				normalizePath(`${destination}/${newPageName}`)
+			);
+		}
+		await this.moveAppearance(oldPath, destination);
+	}
+
 	handleVaultRename(file: TAbstractFile, oldPath: string): Promise<void> {
 		const key = `${oldPath}\n${file.path}`;
 		const existing = this.renameOperations.get(key);
@@ -1028,27 +1097,40 @@ export default class MillerColumnsPlugin extends Plugin {
 
 		const operation = this.finishVaultRename(file, oldPath);
 		this.renameOperations.set(key, operation);
+		this.removeRenameOperationWhenSettled(key, operation);
+		return operation;
+	}
+
+	private removeRenameOperationWhenSettled(key: string, operation: Promise<void>): void {
 		operation.then(
 			() => this.renameOperations.delete(key),
 			() => this.renameOperations.delete(key)
 		);
-		return operation;
 	}
 
 	private async finishVaultRename(file: TAbstractFile, oldPath: string): Promise<void> {
-		// Rename the companion page before slower settings writes can let a view refresh
-		// create a new canonical page and strand the original under its old name.
+		// A native folder rename event can arrive before Obsidian finishes updating its
+		// child-path index. Wait a turn, then retain and rename the actual child object.
 		if (file instanceof TFolder) {
+			await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 			const oldFolderName = oldPath.substring(oldPath.lastIndexOf("/") + 1);
-			const oldPagePath = normalizePath(`${file.path}/${oldFolderName}.md`);
-			const newPagePath = normalizePath(`${file.path}/${file.name}.md`);
-			if (oldPagePath !== newPagePath) {
-				const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
-				if (oldPage instanceof TFile) {
-					if (this.app.vault.getAbstractFileByPath(newPagePath)) {
-						new Notice(`Could not rename ${oldPage.name} because ${newPagePath} already exists.`);
+			const oldPageName = `${oldFolderName}.md`;
+			const newPageName = `${file.name}.md`;
+			if (oldPageName !== newPageName) {
+				const oldPage = file.children.find(
+					(child): child is TFile => child instanceof TFile && child.name === oldPageName
+				);
+				if (oldPage) {
+					const conflict = file.children.find(
+						(child) => child !== oldPage && child.name === newPageName
+					);
+					if (conflict) {
+						new Notice(`Could not rename ${oldPage.name} because ${newPageName} already exists.`);
 					} else {
-						await this.app.fileManager.renameFile(oldPage, newPagePath);
+						await this.app.fileManager.renameFile(
+							oldPage,
+							normalizePath(`${file.path}/${newPageName}`)
+						);
 					}
 				}
 			}

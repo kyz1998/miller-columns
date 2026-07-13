@@ -467,8 +467,10 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   async syncFolderPage(folder, knownPage) {
     if (folder.isRoot()) return;
     try {
-      const page = knownPage != null ? knownPage : await this.ensureFolderPage(folder);
-      if (!page) return;
+      const pagePath = this.folderPagePath(folder);
+      const existing = pagePath ? this.app.vault.getAbstractFileByPath(pagePath) : null;
+      const page = knownPage != null ? knownPage : existing instanceof import_obsidian.TFile ? existing : null;
+      if (!(page instanceof import_obsidian.TFile)) return;
       const block = this.subpageBlock(folder);
       const raw = await this.app.vault.read(page);
       const current = this.stripGeneratedTitle(raw, folder);
@@ -538,7 +540,7 @@ ${body}${SUBPAGE_BLOCK_END}`;
     );
     menu.addSeparator();
     menu.addItem(
-      (mi) => mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, item).open())
+      (mi) => mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, this.plugin, item).open())
     );
     menu.addSeparator();
     menu.addItem(
@@ -647,8 +649,9 @@ ${body}${SUBPAGE_BLOCK_END}`;
   }
 };
 var RenameModal = class extends import_obsidian.Modal {
-  constructor(app, item) {
+  constructor(app, plugin, item) {
     super(app);
+    this.plugin = plugin;
     this.item = item;
   }
   onOpen() {
@@ -684,7 +687,7 @@ var RenameModal = class extends import_obsidian.Modal {
     const prefix = parent && !parent.isRoot() ? parent.path + "/" : "";
     const destination = (0, import_obsidian.normalizePath)(prefix + name);
     try {
-      await this.app.fileManager.renameFile(this.item, destination);
+      await this.plugin.renameItem(this.item, destination);
       this.close();
     } catch (e) {
       new import_obsidian.Notice("Rename failed: " + errorMessage(e));
@@ -900,6 +903,54 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
     this.settings.appearances = next;
     await this.saveSettings();
   }
+  renameItem(item, destination) {
+    if (!(item instanceof import_obsidian.TFolder)) {
+      return this.app.fileManager.renameFile(item, destination);
+    }
+    const oldPath = item.path;
+    const key = `${oldPath}
+${destination}`;
+    const existing = this.renameOperations.get(key);
+    if (existing) return existing;
+    let resolveOperation;
+    let rejectOperation;
+    const operation = new Promise((resolve, reject) => {
+      resolveOperation = resolve;
+      rejectOperation = reject;
+    });
+    this.renameOperations.set(key, operation);
+    void this.performFolderRename(item, oldPath, destination).then(
+      resolveOperation,
+      rejectOperation
+    );
+    this.removeRenameOperationWhenSettled(key, operation);
+    return operation;
+  }
+  async performFolderRename(folder, oldPath, destination) {
+    const oldFolderName = folder.name;
+    const newFolderName = destination.substring(destination.lastIndexOf("/") + 1);
+    const oldPageName = `${oldFolderName}.md`;
+    const newPageName = `${newFolderName}.md`;
+    const companion = folder.children.find(
+      (child) => child instanceof import_obsidian.TFile && child.name === oldPageName
+    );
+    if (companion && oldPageName !== newPageName) {
+      const conflict = folder.children.find(
+        (child) => child !== companion && child.name === newPageName
+      );
+      if (conflict) {
+        throw new Error(`Could not rename attached page because ${newPageName} already exists.`);
+      }
+    }
+    await this.app.fileManager.renameFile(folder, destination);
+    if (companion && oldPageName !== newPageName) {
+      await this.app.fileManager.renameFile(
+        companion,
+        (0, import_obsidian.normalizePath)(`${destination}/${newPageName}`)
+      );
+    }
+    await this.moveAppearance(oldPath, destination);
+  }
   handleVaultRename(file, oldPath) {
     const key = `${oldPath}
 ${file.path}`;
@@ -907,24 +958,36 @@ ${file.path}`;
     if (existing) return existing;
     const operation = this.finishVaultRename(file, oldPath);
     this.renameOperations.set(key, operation);
+    this.removeRenameOperationWhenSettled(key, operation);
+    return operation;
+  }
+  removeRenameOperationWhenSettled(key, operation) {
     operation.then(
       () => this.renameOperations.delete(key),
       () => this.renameOperations.delete(key)
     );
-    return operation;
   }
   async finishVaultRename(file, oldPath) {
     if (file instanceof import_obsidian.TFolder) {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
       const oldFolderName = oldPath.substring(oldPath.lastIndexOf("/") + 1);
-      const oldPagePath = (0, import_obsidian.normalizePath)(`${file.path}/${oldFolderName}.md`);
-      const newPagePath = (0, import_obsidian.normalizePath)(`${file.path}/${file.name}.md`);
-      if (oldPagePath !== newPagePath) {
-        const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
-        if (oldPage instanceof import_obsidian.TFile) {
-          if (this.app.vault.getAbstractFileByPath(newPagePath)) {
-            new import_obsidian.Notice(`Could not rename ${oldPage.name} because ${newPagePath} already exists.`);
+      const oldPageName = `${oldFolderName}.md`;
+      const newPageName = `${file.name}.md`;
+      if (oldPageName !== newPageName) {
+        const oldPage = file.children.find(
+          (child) => child instanceof import_obsidian.TFile && child.name === oldPageName
+        );
+        if (oldPage) {
+          const conflict = file.children.find(
+            (child) => child !== oldPage && child.name === newPageName
+          );
+          if (conflict) {
+            new import_obsidian.Notice(`Could not rename ${oldPage.name} because ${newPageName} already exists.`);
           } else {
-            await this.app.fileManager.renameFile(oldPage, newPagePath);
+            await this.app.fileManager.renameFile(
+              oldPage,
+              (0, import_obsidian.normalizePath)(`${file.path}/${newPageName}`)
+            );
           }
         }
       }
