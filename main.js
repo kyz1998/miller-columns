@@ -125,8 +125,8 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        void this.plugin.moveAppearance(oldPath, file.path);
-        this.queueRefresh([REFRESH_ALL]);
+        const refresh = () => this.queueRefresh([REFRESH_ALL]);
+        void this.plugin.handleVaultRename(file, oldPath).then(refresh, refresh);
       })
     );
     this.buildColumnsFrom(0);
@@ -682,26 +682,13 @@ var RenameModal = class extends import_obsidian.Modal {
     }
     const parent = this.item.parent;
     const prefix = parent && !parent.isRoot() ? parent.path + "/" : "";
-    const oldName = this.item.name;
     const destination = (0, import_obsidian.normalizePath)(prefix + name);
     try {
       await this.app.fileManager.renameFile(this.item, destination);
-      if (this.item instanceof import_obsidian.TFolder) {
-        await this.renameCompanionPage(destination, oldName, name);
-      }
       this.close();
     } catch (e) {
       new import_obsidian.Notice("Rename failed: " + errorMessage(e));
     }
-  }
-  async renameCompanionPage(folderPath, oldFolderName, newFolderName) {
-    const oldPagePath = (0, import_obsidian.normalizePath)(`${folderPath}/${oldFolderName}.md`);
-    const newPagePath = (0, import_obsidian.normalizePath)(`${folderPath}/${newFolderName}.md`);
-    if (oldPagePath === newPagePath) return;
-    const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
-    if (!(oldPage instanceof import_obsidian.TFile)) return;
-    if (this.app.vault.getAbstractFileByPath(newPagePath)) return;
-    await this.app.fileManager.renameFile(oldPage, newPagePath);
   }
   onClose() {
     this.contentEl.empty();
@@ -834,9 +821,20 @@ var AppearanceModal = class extends import_obsidian.Modal {
   }
 };
 var MillerColumnsPlugin = class extends import_obsidian.Plugin {
+  constructor() {
+    super(...arguments);
+    this.renameOperations = /* @__PURE__ */ new Map();
+  }
   async onload() {
     await this.loadSettings();
     (0, import_obsidian.addIcon)(ICON_ID, ICON_SVG);
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        void this.handleVaultRename(file, oldPath).catch((e) => {
+          new import_obsidian.Notice("Could not finish page rename: " + errorMessage(e));
+        });
+      })
+    );
     this.registerView(VIEW_TYPE_MILLER, (leaf) => new MillerColumnsView(leaf, this));
     this.addSettingTab(new MillerColumnsSettingTab(this.app, this));
     this.addRibbonIcon(ICON_ID, "Open Miller Columns", () => void this.activateView());
@@ -901,6 +899,37 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
     if (!changed) return;
     this.settings.appearances = next;
     await this.saveSettings();
+  }
+  handleVaultRename(file, oldPath) {
+    const key = `${oldPath}
+${file.path}`;
+    const existing = this.renameOperations.get(key);
+    if (existing) return existing;
+    const operation = this.finishVaultRename(file, oldPath);
+    this.renameOperations.set(key, operation);
+    operation.then(
+      () => this.renameOperations.delete(key),
+      () => this.renameOperations.delete(key)
+    );
+    return operation;
+  }
+  async finishVaultRename(file, oldPath) {
+    if (file instanceof import_obsidian.TFolder) {
+      const oldFolderName = oldPath.substring(oldPath.lastIndexOf("/") + 1);
+      const oldPagePath = (0, import_obsidian.normalizePath)(`${file.path}/${oldFolderName}.md`);
+      const newPagePath = (0, import_obsidian.normalizePath)(`${file.path}/${file.name}.md`);
+      if (oldPagePath !== newPagePath) {
+        const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
+        if (oldPage instanceof import_obsidian.TFile) {
+          if (this.app.vault.getAbstractFileByPath(newPagePath)) {
+            new import_obsidian.Notice(`Could not rename ${oldPage.name} because ${newPagePath} already exists.`);
+          } else {
+            await this.app.fileManager.renameFile(oldPage, newPagePath);
+          }
+        }
+      }
+    }
+    await this.moveAppearance(oldPath, file.path);
   }
   clampColumnWidth(width) {
     if (!Number.isFinite(width)) return DEFAULT_SETTINGS.columnWidth;

@@ -150,8 +150,8 @@ class MillerColumnsView extends ItemView {
 		);
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
-				void this.plugin.moveAppearance(oldPath, file.path);
-				this.queueRefresh([REFRESH_ALL]);
+				const refresh = () => this.queueRefresh([REFRESH_ALL]);
+				void this.plugin.handleVaultRename(file, oldPath).then(refresh, refresh);
 			})
 		);
 		this.buildColumnsFrom(0);
@@ -764,31 +764,13 @@ class RenameModal extends Modal {
 		}
 		const parent = this.item.parent;
 		const prefix = parent && !parent.isRoot() ? parent.path + "/" : "";
-		const oldName = this.item.name;
 		const destination = normalizePath(prefix + name);
 		try {
 			await this.app.fileManager.renameFile(this.item, destination);
-			if (this.item instanceof TFolder) {
-				await this.renameCompanionPage(destination, oldName, name);
-			}
 			this.close();
 		} catch (e) {
 			new Notice("Rename failed: " + errorMessage(e));
 		}
-	}
-
-	private async renameCompanionPage(
-		folderPath: string,
-		oldFolderName: string,
-		newFolderName: string
-	): Promise<void> {
-		const oldPagePath = normalizePath(`${folderPath}/${oldFolderName}.md`);
-		const newPagePath = normalizePath(`${folderPath}/${newFolderName}.md`);
-		if (oldPagePath === newPagePath) return;
-		const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
-		if (!(oldPage instanceof TFile)) return;
-		if (this.app.vault.getAbstractFileByPath(newPagePath)) return;
-		await this.app.fileManager.renameFile(oldPage, newPagePath);
 	}
 
 	onClose(): void {
@@ -954,10 +936,18 @@ class AppearanceModal extends Modal {
 
 export default class MillerColumnsPlugin extends Plugin {
 	settings: MillerColumnsSettings;
+	private renameOperations = new Map<string, Promise<void>>();
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		addIcon(ICON_ID, ICON_SVG);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				void this.handleVaultRename(file, oldPath).catch((e) => {
+					new Notice("Could not finish page rename: " + errorMessage(e));
+				});
+			})
+		);
 		this.registerView(VIEW_TYPE_MILLER, (leaf) => new MillerColumnsView(leaf, this));
 		this.addSettingTab(new MillerColumnsSettingTab(this.app, this));
 		this.addRibbonIcon(ICON_ID, "Open Miller Columns", () => void this.activateView());
@@ -1029,6 +1019,42 @@ export default class MillerColumnsPlugin extends Plugin {
 		if (!changed) return;
 		this.settings.appearances = next;
 		await this.saveSettings();
+	}
+
+	handleVaultRename(file: TAbstractFile, oldPath: string): Promise<void> {
+		const key = `${oldPath}\n${file.path}`;
+		const existing = this.renameOperations.get(key);
+		if (existing) return existing;
+
+		const operation = this.finishVaultRename(file, oldPath);
+		this.renameOperations.set(key, operation);
+		operation.then(
+			() => this.renameOperations.delete(key),
+			() => this.renameOperations.delete(key)
+		);
+		return operation;
+	}
+
+	private async finishVaultRename(file: TAbstractFile, oldPath: string): Promise<void> {
+		// Rename the companion page before slower settings writes can let a view refresh
+		// create a new canonical page and strand the original under its old name.
+		if (file instanceof TFolder) {
+			const oldFolderName = oldPath.substring(oldPath.lastIndexOf("/") + 1);
+			const oldPagePath = normalizePath(`${file.path}/${oldFolderName}.md`);
+			const newPagePath = normalizePath(`${file.path}/${file.name}.md`);
+			if (oldPagePath !== newPagePath) {
+				const oldPage = this.app.vault.getAbstractFileByPath(oldPagePath);
+				if (oldPage instanceof TFile) {
+					if (this.app.vault.getAbstractFileByPath(newPagePath)) {
+						new Notice(`Could not rename ${oldPage.name} because ${newPagePath} already exists.`);
+					} else {
+						await this.app.fileManager.renameFile(oldPage, newPagePath);
+					}
+				}
+			}
+		}
+
+		await this.moveAppearance(oldPath, file.path);
 	}
 
 	private clampColumnWidth(width: number): number {
