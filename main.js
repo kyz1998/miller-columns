@@ -41,7 +41,9 @@ var MAX_COLUMN_WIDTH = 520;
 var DEFAULT_SETTINGS = {
   columnWidth: 220,
   columnWidths: [],
-  appearances: {}
+  appearances: {},
+  pinnedPaths: [],
+  shortcuts: []
 };
 var DEFAULT_PAGE_ICON = "file-text";
 var ICON_PRESETS = ["file-text", "book-open", "notebook", "library", "folder", "star", "bookmark", "lightbulb", "pen-line"];
@@ -94,6 +96,8 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.plugin = plugin;
     /** selection[i] is the selected item in column i; only the last entry may be a file. */
     this.selection = [];
+    this.activeTag = null;
+    this.tagSelection = null;
     this.activeColumn = 0;
     this.columns = [];
     this.affected = /* @__PURE__ */ new Set();
@@ -129,6 +133,9 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
         void this.plugin.handleVaultRename(file, oldPath).then(refresh, refresh);
       })
     );
+    this.registerEvent(
+      this.app.metadataCache.on("changed", () => this.queueRefresh([REFRESH_ALL]))
+    );
     this.buildColumnsFrom(0);
   }
   async onClose() {
@@ -142,9 +149,13 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     );
     this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
   }
+  refreshNavigation() {
+    this.queueRefresh([REFRESH_ALL]);
+  }
   // ---------------------------------------------------------------- columns
   /** Number of columns implied by the current selection (root + one per selected folder). */
   columnCount() {
+    if (this.activeTag !== null) return 2;
     let n = 1;
     for (const item of this.selection) {
       if (item instanceof import_obsidian.TFolder) n++;
@@ -153,6 +164,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     return n;
   }
   folderForColumn(i) {
+    if (this.activeTag !== null && i > 0) return null;
     if (i === 0) return this.app.vault.getRoot();
     const sel = this.selection[i - 1];
     return sel instanceof import_obsidian.TFolder ? sel : null;
@@ -169,23 +181,36 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const configDir = this.app.vault.configDir;
     return folder.children.filter((c) => c.path !== configDir && !this.isFolderPage(folder, c));
   }
+  sourceForColumn(i) {
+    if (i === 0) return { kind: "folder", folder: this.app.vault.getRoot() };
+    if (this.activeTag !== null && i === 1) return { kind: "tag", tag: this.activeTag };
+    const folder = this.folderForColumn(i);
+    return folder ? { kind: "folder", folder } : null;
+  }
+  sortAndPin(items) {
+    const folders = items.filter((item) => item instanceof import_obsidian.TFolder).sort(compareNames);
+    const files = items.filter((item) => item instanceof import_obsidian.TFile).sort(compareNames);
+    const sorted = [...folders, ...files];
+    return [
+      ...sorted.filter((item) => this.plugin.isPinned(item.path)),
+      ...sorted.filter((item) => !this.plugin.isPinned(item.path))
+    ];
+  }
   itemsForColumn(i) {
     const col = this.columns[i];
     if (!col) return [];
-    const children = this.visibleChildren(col.folder);
-    const folders = children.filter((c) => c instanceof import_obsidian.TFolder).sort(compareNames);
-    const files = children.filter((c) => c instanceof import_obsidian.TFile).sort(compareNames);
-    return [...folders, ...files];
+    if (col.source.kind === "tag") return this.filesForTag(col.source.tag);
+    return this.sortAndPin(this.visibleChildren(col.source.folder));
   }
   /** Remove columns from `index` on, then (re)create every column the selection implies. */
   buildColumnsFrom(index, scroll = true) {
     for (const col of this.columns.splice(index)) col.el.detach();
     const total = this.columnCount();
     for (let i = this.columns.length; i < total; i++) {
-      const folder = this.folderForColumn(i);
-      if (!folder) break;
+      const source = this.sourceForColumn(i);
+      if (!source) break;
       const el = this.columnsEl.createDiv({ cls: "mc-column" });
-      this.columns.push({ folder, el });
+      this.columns.push({ source, el });
       this.applyColumnWidth(el, i);
       this.attachColumnHandlers(el, i);
       this.renderColumn(i);
@@ -197,14 +222,153 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     const col = this.columns[i];
     if (!col) return;
     col.el.empty();
-    const items = this.itemsForColumn(i);
+    if (col.source.kind === "tag") {
+      this.renderTagResults(col.el, i, col.source.tag);
+    } else {
+      this.renderFolderColumn(col.el, i, col.source.folder);
+    }
+    this.renderResizeHandle(col.el, i);
+  }
+  renderFolderColumn(colEl, colIndex, folder) {
+    const items = this.itemsForColumn(colIndex);
+    const pinned = items.filter((item) => this.plugin.isPinned(item.path));
+    const normal = items.filter((item) => !this.plugin.isPinned(item.path));
+    if (folder.isRoot()) {
+      this.renderSectionHeader(colEl, "Shortcuts", "star");
+      this.renderShortcuts(colEl, colIndex);
+    }
+    if (pinned.length > 0) {
+      this.renderSectionHeader(colEl, "Pinned", "pin");
+      for (const item of pinned) this.renderRow(colEl, colIndex, item);
+    }
+    if (folder.isRoot() || pinned.length > 0) {
+      this.renderSectionHeader(colEl, folder.isRoot() ? "Vault" : "Pages", "folder-tree");
+    }
+    if (normal.length > 0) {
+      for (const item of normal) this.renderRow(colEl, colIndex, item);
+    } else if (pinned.length === 0) {
+      colEl.createDiv({
+        cls: "mc-section-empty",
+        text: "No pages. Right-click to create one."
+      });
+    }
+    if (folder.isRoot()) {
+      this.renderSectionHeader(colEl, "Tags", "tags");
+      const tags = this.tagEntries();
+      if (tags.length === 0) {
+        colEl.createDiv({ cls: "mc-section-empty", text: "No tags yet." });
+      } else {
+        for (const entry of tags) this.renderTagRow(colEl, entry);
+      }
+    }
+  }
+  renderTagResults(colEl, colIndex, tag) {
+    this.renderSectionHeader(colEl, `#${tag}`, "tag");
+    const items = this.filesForTag(tag);
+    const pinned = items.filter((item) => this.plugin.isPinned(item.path));
+    const normal = items.filter((item) => !this.plugin.isPinned(item.path));
+    if (pinned.length > 0) {
+      this.renderSectionHeader(colEl, "Pinned", "pin");
+      for (const item of pinned) {
+        this.renderRow(colEl, colIndex, item, () => this.selectTagResult(item));
+      }
+    }
+    if (pinned.length > 0 && normal.length > 0) {
+      this.renderSectionHeader(colEl, "Results", "files");
+    }
+    for (const item of normal) {
+      this.renderRow(colEl, colIndex, item, () => this.selectTagResult(item));
+    }
     if (items.length === 0) {
-      col.el.createDiv({ cls: "mc-empty", text: "No pages. Right-click to create one." });
-      this.renderResizeHandle(col.el, i);
+      colEl.createDiv({ cls: "mc-empty", text: `No pages tagged #${tag}.` });
+    }
+  }
+  renderSectionHeader(colEl, title, icon) {
+    const header = colEl.createDiv({ cls: "mc-section-header" });
+    const iconEl = header.createSpan({ cls: "mc-section-icon" });
+    (0, import_obsidian.setIcon)(iconEl, icon);
+    header.createSpan({ text: title });
+  }
+  renderShortcuts(colEl, colIndex) {
+    if (this.plugin.settings.shortcuts.length === 0) {
+      colEl.createDiv({ cls: "mc-section-empty", text: "Add shortcuts from an item menu." });
       return;
     }
-    for (const item of items) this.renderRow(col.el, i, item);
-    this.renderResizeHandle(col.el, i);
+    let rendered = 0;
+    for (const shortcut of this.plugin.settings.shortcuts) {
+      if (shortcut.type === "path") {
+        const item = this.app.vault.getAbstractFileByPath(shortcut.value);
+        if (!item) continue;
+        const row = this.renderRow(colEl, colIndex, item, () => this.openShortcut(item));
+        row.addClass("mc-shortcut");
+        row.dataset.shortcut = "true";
+        rendered++;
+      } else {
+        this.renderTagRow(colEl, {
+          tag: shortcut.value,
+          count: this.filesForTag(shortcut.value).length
+        }, true);
+        rendered++;
+      }
+    }
+    if (rendered === 0) {
+      colEl.createDiv({ cls: "mc-section-empty", text: "No available shortcuts." });
+    }
+  }
+  renderTagRow(colEl, entry, shortcut = false) {
+    const row = colEl.createDiv({ cls: "mc-item mc-tag-item" });
+    row.dataset.tag = entry.tag;
+    if (shortcut) {
+      row.addClass("mc-shortcut");
+      row.dataset.shortcut = "true";
+    } else {
+      row.style.setProperty("--mc-tag-depth", String(entry.tag.split("/").length - 1));
+    }
+    const iconEl = row.createSpan({ cls: "mc-icon" });
+    (0, import_obsidian.setIcon)(iconEl, shortcut ? "star" : "tag");
+    row.createSpan({ cls: "mc-name", text: `#${entry.tag}` });
+    row.createSpan({ cls: "mc-count", text: String(entry.count) });
+    row.createSpan({ cls: "mc-chevron", text: "\u203A" });
+    row.addEventListener("click", () => {
+      this.columnsEl.focus({ preventScroll: true });
+      this.selectTag(entry.tag);
+    });
+    row.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.showTagMenu(e, entry.tag);
+    });
+  }
+  tagEntries() {
+    var _a;
+    const counts = /* @__PURE__ */ new Map();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const tags = /* @__PURE__ */ new Set();
+      for (const tag of this.tagsForFile(file)) {
+        const parts = tag.split("/");
+        for (let i = 1; i <= parts.length; i++) tags.add(parts.slice(0, i).join("/"));
+      }
+      for (const tag of tags) counts.set(tag, ((_a = counts.get(tag)) != null ? _a : 0) + 1);
+    }
+    return Array.from(counts, ([tag, count]) => ({ tag, count })).sort(
+      (a, b) => a.tag.localeCompare(b.tag, void 0, { sensitivity: "base", numeric: true })
+    );
+  }
+  tagsForFile(file) {
+    var _a;
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (!cache) return [];
+    return ((_a = (0, import_obsidian.getAllTags)(cache)) != null ? _a : []).map(normalizeTag).filter(Boolean);
+  }
+  filesForTag(tag) {
+    const matches = this.app.vault.getMarkdownFiles().filter(
+      (file) => this.tagsForFile(file).some((candidate) => candidate === tag || candidate.startsWith(tag + "/"))
+    );
+    matches.sort(compareNames);
+    return [
+      ...matches.filter((file) => this.plugin.isPinned(file.path)),
+      ...matches.filter((file) => !this.plugin.isPinned(file.path))
+    ];
   }
   applyColumnWidth(el, index) {
     const width = this.plugin.columnWidthFor(index);
@@ -249,10 +413,11 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       await this.plugin.saveSettings();
     });
   }
-  renderRow(colEl, colIndex, item) {
+  renderRow(colEl, colIndex, item, onSelect) {
     var _a;
     const row = colEl.createDiv({ cls: "mc-item" });
     row.dataset.path = item.path;
+    row.setAttr("title", item.path);
     row.setAttr("draggable", "true");
     const iconEl = row.createSpan({ cls: "mc-icon" });
     const appearance = this.plugin.appearanceFor(item.path);
@@ -265,7 +430,8 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     }
     row.addEventListener("click", () => {
       this.columnsEl.focus({ preventScroll: true });
-      this.selectItem(colIndex, item);
+      if (onSelect) onSelect();
+      else this.selectItem(colIndex, item);
     });
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -280,27 +446,37 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     if (item instanceof import_obsidian.TFolder) {
       this.addDropHandlers(row, () => item);
     }
+    return row;
   }
   attachColumnHandlers(el, index) {
     el.addEventListener("contextmenu", (e) => {
       if (e.target.closest(".mc-item")) return;
       e.preventDefault();
       const col = this.columns[index];
-      if (col) this.showFolderMenu(e, col.folder);
+      if ((col == null ? void 0 : col.source.kind) === "folder") this.showFolderMenu(e, col.source.folder);
     });
     this.addDropHandlers(el, () => {
-      var _a, _b;
-      return (_b = (_a = this.columns[index]) == null ? void 0 : _a.folder) != null ? _b : null;
+      var _a;
+      const source = (_a = this.columns[index]) == null ? void 0 : _a.source;
+      return (source == null ? void 0 : source.kind) === "folder" ? source.folder : null;
     });
   }
   updateSelectionClasses() {
-    const tipIndex = this.selection.length - 1;
     this.columns.forEach((col, i) => {
-      const selPath = this.selection[i] ? this.selection[i].path : null;
       col.el.querySelectorAll(".mc-item").forEach((row) => {
-        const selected = selPath !== null && row.dataset.path === selPath;
+        var _a, _b;
+        let selected = false;
+        if (row.dataset.shortcut !== "true") {
+          if (row.dataset.tag) {
+            selected = this.activeTag === row.dataset.tag;
+          } else if (col.source.kind === "tag") {
+            selected = ((_a = this.tagSelection) == null ? void 0 : _a.path) === row.dataset.path;
+          } else {
+            selected = ((_b = this.selection[i]) == null ? void 0 : _b.path) === row.dataset.path;
+          }
+        }
         row.classList.toggle("is-selected", selected);
-        row.classList.toggle("is-active", selected && i === tipIndex);
+        row.classList.toggle("is-active", selected && i === this.activeColumn);
       });
     });
   }
@@ -322,6 +498,8 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   }
   // -------------------------------------------------------------- selection
   selectItem(colIndex, item, openFile = true) {
+    this.activeTag = null;
+    this.tagSelection = null;
     this.selection = this.selection.slice(0, colIndex);
     this.selection[colIndex] = item;
     this.activeColumn = colIndex;
@@ -335,6 +513,8 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
   }
   /** Select the full ancestor chain of `item` and rebuild all columns around it. */
   revealPath(item) {
+    this.activeTag = null;
+    this.tagSelection = null;
     const chain = [];
     let cur = item;
     while (cur && cur.parent) {
@@ -346,25 +526,48 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
     this.buildColumnsFrom(0);
     if (chain.length > 0) this.scrollRowIntoView(chain.length - 1, item.path);
   }
+  openShortcut(item) {
+    this.revealPath(item);
+    if (item instanceof import_obsidian.TFile) void this.openPageFile(item);
+    else if (item instanceof import_obsidian.TFolder) void this.openFolderPage(item);
+  }
+  selectTag(tag) {
+    this.selection = [];
+    this.activeTag = tag;
+    this.tagSelection = null;
+    this.activeColumn = 1;
+    this.buildColumnsFrom(0);
+  }
+  selectTagResult(file, openFile = true) {
+    this.tagSelection = file;
+    this.activeColumn = 1;
+    this.updateSelectionClasses();
+    this.scrollRowIntoView(1, file.path);
+    if (openFile) void this.openPageFile(file);
+  }
   // --------------------------------------------------------------- keyboard
   onKeyDown(e) {
+    var _a;
     if (this.columns.length === 0) return;
     const col = Math.min(this.activeColumn, this.columns.length - 1);
     this.activeColumn = col;
     const items = this.itemsForColumn(col);
-    const current = this.selection[col];
+    const isTagColumn = ((_a = this.columns[col]) == null ? void 0 : _a.source.kind) === "tag";
+    const current = isTagColumn ? this.tagSelection : this.selection[col];
     const idx = current ? items.indexOf(current) : -1;
     switch (e.key) {
       case "ArrowDown": {
         if (items.length === 0) break;
         const next = items[Math.min(items.length - 1, idx + 1)];
-        this.selectItem(col, next, false);
+        if (isTagColumn && next instanceof import_obsidian.TFile) this.selectTagResult(next, false);
+        else this.selectItem(col, next, false);
         break;
       }
       case "ArrowUp": {
         if (items.length === 0) break;
         const next = items[idx === -1 ? items.length - 1 : Math.max(0, idx - 1)];
-        this.selectItem(col, next, false);
+        if (isTagColumn && next instanceof import_obsidian.TFile) this.selectTagResult(next, false);
+        else this.selectItem(col, next, false);
         break;
       }
       case "ArrowLeft": {
@@ -376,7 +579,7 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
         break;
       }
       case "Enter": {
-        const sel = this.selection[col];
+        const sel = isTagColumn ? this.tagSelection : this.selection[col];
         if (sel instanceof import_obsidian.TFile) {
           void this.openPageFile(sel);
         } else if (sel instanceof import_obsidian.TFolder) {
@@ -423,13 +626,16 @@ var MillerColumnsView = class extends import_obsidian.ItemView {
       valid++;
     }
     if (valid < this.selection.length) this.selection.length = valid;
+    if (this.tagSelection && this.app.vault.getAbstractFileByPath(this.tagSelection.path) !== this.tagSelection) {
+      this.tagSelection = null;
+    }
     this.activeColumn = Math.min(this.activeColumn, this.columnCount() - 1);
     this.buildColumnsFrom(this.columnCount(), false);
     const all = affected.has(REFRESH_ALL);
     this.columns.forEach((col, i) => {
-      if (all || affected.has(col.folder.path)) {
+      if (all || col.source.kind === "tag" || col.source.kind === "folder" && affected.has(col.source.folder.path)) {
         this.renderColumn(i);
-        void this.syncFolderPage(col.folder);
+        if (col.source.kind === "folder") void this.syncFolderPage(col.source.folder);
       }
     });
     this.updateSelectionClasses();
@@ -540,6 +746,15 @@ ${body}${SUBPAGE_BLOCK_END}`;
     );
     menu.addSeparator();
     menu.addItem(
+      (mi) => mi.setTitle(this.plugin.isPinned(item.path) ? "Unpin" : "Pin").setIcon("pin").onClick(() => void this.plugin.togglePinned(item.path))
+    );
+    menu.addItem(
+      (mi) => mi.setTitle(
+        this.plugin.hasShortcut("path", item.path) ? "Remove shortcut" : "Add shortcut"
+      ).setIcon("star").onClick(() => void this.plugin.toggleShortcut("path", item.path))
+    );
+    menu.addSeparator();
+    menu.addItem(
       (mi) => mi.setTitle("Rename").setIcon("pencil").onClick(() => new RenameModal(this.app, this.plugin, item).open())
     );
     menu.addSeparator();
@@ -551,6 +766,15 @@ ${body}${SUBPAGE_BLOCK_END}`;
           new import_obsidian.Notice("Could not delete: " + errorMessage(err));
         }
       })
+    );
+    menu.showAtMouseEvent(e);
+  }
+  showTagMenu(e, tag) {
+    const menu = new import_obsidian.Menu();
+    menu.addItem(
+      (mi) => mi.setTitle(
+        this.plugin.hasShortcut("tag", tag) ? "Remove shortcut" : "Add shortcut"
+      ).setIcon("star").onClick(() => void this.plugin.toggleShortcut("tag", tag))
     );
     menu.showAtMouseEvent(e);
   }
@@ -849,11 +1073,16 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
   }
   async loadSettings() {
     const loaded = await this.loadData();
+    const shortcuts = Array.isArray(loaded == null ? void 0 : loaded.shortcuts) ? loaded.shortcuts.filter(
+      (shortcut) => Boolean(shortcut) && (shortcut.type === "path" || shortcut.type === "tag") && typeof shortcut.value === "string" && shortcut.value.length > 0
+    ) : [];
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...loaded,
       columnWidths: Array.isArray(loaded == null ? void 0 : loaded.columnWidths) ? loaded.columnWidths : [],
-      appearances: (loaded == null ? void 0 : loaded.appearances) && typeof loaded.appearances === "object" ? loaded.appearances : {}
+      appearances: (loaded == null ? void 0 : loaded.appearances) && typeof loaded.appearances === "object" ? loaded.appearances : {},
+      pinnedPaths: Array.isArray(loaded == null ? void 0 : loaded.pinnedPaths) ? Array.from(new Set(loaded.pinnedPaths.filter((path) => typeof path === "string"))) : [],
+      shortcuts
     };
     this.settings.columnWidth = this.clampColumnWidth(this.settings.columnWidth);
     this.settings.columnWidths = this.settings.columnWidths.map(
@@ -864,7 +1093,10 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
     await this.saveData(this.settings);
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MILLER)) {
       const view = leaf.view;
-      if (view instanceof MillerColumnsView) view.applySettings();
+      if (view instanceof MillerColumnsView) {
+        view.applySettings();
+        view.refreshNavigation();
+      }
     }
   }
   columnWidthFor(index) {
@@ -886,21 +1118,64 @@ var MillerColumnsPlugin = class extends import_obsidian.Plugin {
   setAppearance(path, appearance) {
     this.settings.appearances[path] = appearance;
   }
+  isPinned(path) {
+    return this.settings.pinnedPaths.includes(path);
+  }
+  async togglePinned(path) {
+    if (this.isPinned(path)) {
+      this.settings.pinnedPaths = this.settings.pinnedPaths.filter((candidate) => candidate !== path);
+    } else {
+      this.settings.pinnedPaths.push(path);
+    }
+    await this.saveSettings();
+  }
+  hasShortcut(type, value) {
+    return this.settings.shortcuts.some(
+      (shortcut) => shortcut.type === type && shortcut.value === value
+    );
+  }
+  async toggleShortcut(type, value) {
+    if (this.hasShortcut(type, value)) {
+      this.settings.shortcuts = this.settings.shortcuts.filter(
+        (shortcut) => shortcut.type !== type || shortcut.value !== value
+      );
+    } else {
+      this.settings.shortcuts.push({ type, value });
+    }
+    await this.saveSettings();
+  }
   async moveAppearance(oldPath, newPath) {
     let changed = false;
+    const movePath = (path) => {
+      if (path === oldPath) return newPath;
+      if (path.startsWith(oldPath + "/")) return newPath + path.substring(oldPath.length);
+      return path;
+    };
     const next = {};
     for (const [path, appearance] of Object.entries(this.settings.appearances)) {
-      let targetPath = path;
-      if (path === oldPath) {
-        targetPath = newPath;
-      } else if (path.startsWith(oldPath + "/")) {
-        targetPath = newPath + path.substring(oldPath.length);
-      }
+      const targetPath = movePath(path);
       if (targetPath !== path) changed = true;
       next[targetPath] = appearance;
     }
+    const pinnedPaths = this.settings.pinnedPaths.map((path) => {
+      const targetPath = movePath(path);
+      if (targetPath !== path) changed = true;
+      return targetPath;
+    });
+    const shortcuts = this.settings.shortcuts.map((shortcut) => {
+      if (shortcut.type !== "path") return shortcut;
+      const targetPath = movePath(shortcut.value);
+      if (targetPath !== shortcut.value) changed = true;
+      return { ...shortcut, value: targetPath };
+    });
     if (!changed) return;
     this.settings.appearances = next;
+    this.settings.pinnedPaths = Array.from(new Set(pinnedPaths));
+    this.settings.shortcuts = shortcuts.filter(
+      (shortcut, index, all) => all.findIndex(
+        (candidate) => candidate.type === shortcut.type && candidate.value === shortcut.value
+      ) === index
+    );
     await this.saveSettings();
   }
   renameItem(item, destination) {

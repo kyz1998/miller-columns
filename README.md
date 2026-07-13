@@ -5,11 +5,14 @@ An Obsidian plugin that turns vault structure into cascading pages. Pages can co
 ## Features
 
 - **Cascading pages** — the vault root is the first column; clicking a page with subpages opens its children in a new column to the right.
+- **Shortcuts** — add any page, folder, or tag to a global section above the vault tree for quick access.
+- **Pinned pages** — pin pages and folders above their normal siblings without duplicating or moving the underlying files.
+- **Tag navigation** — browse nested tags below the vault tree; selecting a tag opens its matching pages in a new Miller column, with pinned matches first.
 - **Unified pages** — selecting a page with children creates/opens `Page/Page.md`, so pages and notes behave as one concept.
 - **Automatic child links** — each parent page keeps a managed block of direct child page titles, linked without embedding their contents.
 - **Custom appearance** — right-click a page to choose a Lucide icon and color for the column row.
 - **Adjustable columns** — drag a column's right edge to resize that column depth, or set the default width from plugin settings.
-- **Page operations** — right-click any item (or a column's empty space) for New page, Rename, and Delete (respects your trash setting). The header button creates a page in the deepest selected page.
+- **Page operations** — right-click an item for New page, Tags, Pin, Add shortcut, Rename, and Delete (respects your trash setting); right-click a tag to add or remove its shortcut.
 - **Drag & drop** — drop an item onto any page with subpages (or column background) to move it.
 - **Live updates** — vault create/delete/rename events refresh only the affected columns and preserve your selection path; externally deleted paths prune back to the deepest valid ancestor.
 - **Keyboard navigation** — Arrow Up/Down move within a column, Right descends into a page, Left returns to the parent column, Enter opens the selected page.

@@ -12,6 +12,7 @@ import {
 	TFolder,
 	WorkspaceLeaf,
 	addIcon,
+	getAllTags,
 	normalizePath,
 	setIcon,
 } from "obsidian";
@@ -35,6 +36,8 @@ const DEFAULT_SETTINGS: MillerColumnsSettings = {
 	columnWidth: 220,
 	columnWidths: [],
 	appearances: {},
+	pinnedPaths: [],
+	shortcuts: [],
 };
 const DEFAULT_PAGE_ICON = "file-text";
 const ICON_PRESETS = ["file-text", "book-open", "notebook", "library", "folder", "star", "bookmark", "lightbulb", "pen-line"];
@@ -90,15 +93,31 @@ function frontmatterTags(value: unknown): string[] {
 	return [];
 }
 
+type ColumnSource =
+	| { kind: "folder"; folder: TFolder }
+	| { kind: "tag"; tag: string };
+
 interface Column {
-	folder: TFolder;
+	source: ColumnSource;
 	el: HTMLElement;
+}
+
+interface NavigationShortcut {
+	type: "path" | "tag";
+	value: string;
+}
+
+interface TagEntry {
+	tag: string;
+	count: number;
 }
 
 interface MillerColumnsSettings {
 	columnWidth: number;
 	columnWidths: Array<number | null>;
 	appearances: Record<string, PageAppearance>;
+	pinnedPaths: string[];
+	shortcuts: NavigationShortcut[];
 }
 
 interface PageAppearance {
@@ -109,6 +128,8 @@ interface PageAppearance {
 class MillerColumnsView extends ItemView {
 	/** selection[i] is the selected item in column i; only the last entry may be a file. */
 	private selection: TAbstractFile[] = [];
+	private activeTag: string | null = null;
+	private tagSelection: TFile | null = null;
 	private activeColumn = 0;
 	private columns: Column[] = [];
 	private columnsEl: HTMLElement;
@@ -154,6 +175,9 @@ class MillerColumnsView extends ItemView {
 				void this.plugin.handleVaultRename(file, oldPath).then(refresh, refresh);
 			})
 		);
+		this.registerEvent(
+			this.app.metadataCache.on("changed", () => this.queueRefresh([REFRESH_ALL]))
+		);
 		this.buildColumnsFrom(0);
 	}
 
@@ -170,10 +194,15 @@ class MillerColumnsView extends ItemView {
 		this.columns.forEach((col, i) => this.applyColumnWidth(col.el, i));
 	}
 
+	refreshNavigation(): void {
+		this.queueRefresh([REFRESH_ALL]);
+	}
+
 	// ---------------------------------------------------------------- columns
 
 	/** Number of columns implied by the current selection (root + one per selected folder). */
 	private columnCount(): number {
+		if (this.activeTag !== null) return 2;
 		let n = 1;
 		for (const item of this.selection) {
 			if (item instanceof TFolder) n++;
@@ -183,6 +212,7 @@ class MillerColumnsView extends ItemView {
 	}
 
 	private folderForColumn(i: number): TFolder | null {
+		if (this.activeTag !== null && i > 0) return null;
 		if (i === 0) return this.app.vault.getRoot();
 		const sel = this.selection[i - 1];
 		return sel instanceof TFolder ? sel : null;
@@ -203,13 +233,28 @@ class MillerColumnsView extends ItemView {
 		return folder.children.filter((c) => c.path !== configDir && !this.isFolderPage(folder, c));
 	}
 
+	private sourceForColumn(i: number): ColumnSource | null {
+		if (i === 0) return { kind: "folder", folder: this.app.vault.getRoot() };
+		if (this.activeTag !== null && i === 1) return { kind: "tag", tag: this.activeTag };
+		const folder = this.folderForColumn(i);
+		return folder ? { kind: "folder", folder } : null;
+	}
+
+	private sortAndPin(items: TAbstractFile[]): TAbstractFile[] {
+		const folders = items.filter((item) => item instanceof TFolder).sort(compareNames);
+		const files = items.filter((item) => item instanceof TFile).sort(compareNames);
+		const sorted = [...folders, ...files];
+		return [
+			...sorted.filter((item) => this.plugin.isPinned(item.path)),
+			...sorted.filter((item) => !this.plugin.isPinned(item.path)),
+		];
+	}
+
 	private itemsForColumn(i: number): TAbstractFile[] {
 		const col = this.columns[i];
 		if (!col) return [];
-		const children = this.visibleChildren(col.folder);
-		const folders = children.filter((c) => c instanceof TFolder).sort(compareNames);
-		const files = children.filter((c) => c instanceof TFile).sort(compareNames);
-		return [...folders, ...files];
+		if (col.source.kind === "tag") return this.filesForTag(col.source.tag);
+		return this.sortAndPin(this.visibleChildren(col.source.folder));
 	}
 
 	/** Remove columns from `index` on, then (re)create every column the selection implies. */
@@ -217,10 +262,10 @@ class MillerColumnsView extends ItemView {
 		for (const col of this.columns.splice(index)) col.el.detach();
 		const total = this.columnCount();
 		for (let i = this.columns.length; i < total; i++) {
-			const folder = this.folderForColumn(i);
-			if (!folder) break;
+			const source = this.sourceForColumn(i);
+			if (!source) break;
 			const el = this.columnsEl.createDiv({ cls: "mc-column" });
-			this.columns.push({ folder, el });
+			this.columns.push({ source, el });
 			this.applyColumnWidth(el, i);
 			this.attachColumnHandlers(el, i);
 			this.renderColumn(i);
@@ -233,14 +278,163 @@ class MillerColumnsView extends ItemView {
 		const col = this.columns[i];
 		if (!col) return;
 		col.el.empty();
-		const items = this.itemsForColumn(i);
+		if (col.source.kind === "tag") {
+			this.renderTagResults(col.el, i, col.source.tag);
+		} else {
+			this.renderFolderColumn(col.el, i, col.source.folder);
+		}
+		this.renderResizeHandle(col.el, i);
+	}
+
+	private renderFolderColumn(colEl: HTMLElement, colIndex: number, folder: TFolder): void {
+		const items = this.itemsForColumn(colIndex);
+		const pinned = items.filter((item) => this.plugin.isPinned(item.path));
+		const normal = items.filter((item) => !this.plugin.isPinned(item.path));
+
+		if (folder.isRoot()) {
+			this.renderSectionHeader(colEl, "Shortcuts", "star");
+			this.renderShortcuts(colEl, colIndex);
+		}
+
+		if (pinned.length > 0) {
+			this.renderSectionHeader(colEl, "Pinned", "pin");
+			for (const item of pinned) this.renderRow(colEl, colIndex, item);
+		}
+
+		if (folder.isRoot() || pinned.length > 0) {
+			this.renderSectionHeader(colEl, folder.isRoot() ? "Vault" : "Pages", "folder-tree");
+		}
+		if (normal.length > 0) {
+			for (const item of normal) this.renderRow(colEl, colIndex, item);
+		} else if (pinned.length === 0) {
+			colEl.createDiv({
+				cls: "mc-section-empty",
+				text: "No pages. Right-click to create one.",
+			});
+		}
+
+		if (folder.isRoot()) {
+			this.renderSectionHeader(colEl, "Tags", "tags");
+			const tags = this.tagEntries();
+			if (tags.length === 0) {
+				colEl.createDiv({ cls: "mc-section-empty", text: "No tags yet." });
+			} else {
+				for (const entry of tags) this.renderTagRow(colEl, entry);
+			}
+		}
+	}
+
+	private renderTagResults(colEl: HTMLElement, colIndex: number, tag: string): void {
+		this.renderSectionHeader(colEl, `#${tag}`, "tag");
+		const items = this.filesForTag(tag);
+		const pinned = items.filter((item) => this.plugin.isPinned(item.path));
+		const normal = items.filter((item) => !this.plugin.isPinned(item.path));
+		if (pinned.length > 0) {
+			this.renderSectionHeader(colEl, "Pinned", "pin");
+			for (const item of pinned) {
+				this.renderRow(colEl, colIndex, item, () => this.selectTagResult(item));
+			}
+		}
+		if (pinned.length > 0 && normal.length > 0) {
+			this.renderSectionHeader(colEl, "Results", "files");
+		}
+		for (const item of normal) {
+			this.renderRow(colEl, colIndex, item, () => this.selectTagResult(item));
+		}
 		if (items.length === 0) {
-			col.el.createDiv({ cls: "mc-empty", text: "No pages. Right-click to create one." });
-			this.renderResizeHandle(col.el, i);
+			colEl.createDiv({ cls: "mc-empty", text: `No pages tagged #${tag}.` });
+		}
+	}
+
+	private renderSectionHeader(colEl: HTMLElement, title: string, icon: string): void {
+		const header = colEl.createDiv({ cls: "mc-section-header" });
+		const iconEl = header.createSpan({ cls: "mc-section-icon" });
+		setIcon(iconEl, icon);
+		header.createSpan({ text: title });
+	}
+
+	private renderShortcuts(colEl: HTMLElement, colIndex: number): void {
+		if (this.plugin.settings.shortcuts.length === 0) {
+			colEl.createDiv({ cls: "mc-section-empty", text: "Add shortcuts from an item menu." });
 			return;
 		}
-		for (const item of items) this.renderRow(col.el, i, item);
-		this.renderResizeHandle(col.el, i);
+		let rendered = 0;
+		for (const shortcut of this.plugin.settings.shortcuts) {
+			if (shortcut.type === "path") {
+				const item = this.app.vault.getAbstractFileByPath(shortcut.value);
+				if (!item) continue;
+				const row = this.renderRow(colEl, colIndex, item, () => this.openShortcut(item));
+				row.addClass("mc-shortcut");
+				row.dataset.shortcut = "true";
+				rendered++;
+			} else {
+				this.renderTagRow(colEl, {
+					tag: shortcut.value,
+					count: this.filesForTag(shortcut.value).length,
+				}, true);
+				rendered++;
+			}
+		}
+		if (rendered === 0) {
+			colEl.createDiv({ cls: "mc-section-empty", text: "No available shortcuts." });
+		}
+	}
+
+	private renderTagRow(colEl: HTMLElement, entry: TagEntry, shortcut = false): void {
+		const row = colEl.createDiv({ cls: "mc-item mc-tag-item" });
+		row.dataset.tag = entry.tag;
+		if (shortcut) {
+			row.addClass("mc-shortcut");
+			row.dataset.shortcut = "true";
+		} else {
+			row.style.setProperty("--mc-tag-depth", String(entry.tag.split("/").length - 1));
+		}
+		const iconEl = row.createSpan({ cls: "mc-icon" });
+		setIcon(iconEl, shortcut ? "star" : "tag");
+		row.createSpan({ cls: "mc-name", text: `#${entry.tag}` });
+		row.createSpan({ cls: "mc-count", text: String(entry.count) });
+		row.createSpan({ cls: "mc-chevron", text: "›" });
+		row.addEventListener("click", () => {
+			this.columnsEl.focus({ preventScroll: true });
+			this.selectTag(entry.tag);
+		});
+		row.addEventListener("contextmenu", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this.showTagMenu(e, entry.tag);
+		});
+	}
+
+	private tagEntries(): TagEntry[] {
+		const counts = new Map<string, number>();
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			const tags = new Set<string>();
+			for (const tag of this.tagsForFile(file)) {
+				const parts = tag.split("/");
+				for (let i = 1; i <= parts.length; i++) tags.add(parts.slice(0, i).join("/"));
+			}
+			for (const tag of tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+		}
+		return Array.from(counts, ([tag, count]) => ({ tag, count })).sort((a, b) =>
+			a.tag.localeCompare(b.tag, undefined, { sensitivity: "base", numeric: true })
+		);
+	}
+
+	private tagsForFile(file: TFile): string[] {
+		const cache = this.app.metadataCache.getFileCache(file);
+		if (!cache) return [];
+		return (getAllTags(cache) ?? []).map(normalizeTag).filter(Boolean);
+	}
+
+	private filesForTag(tag: string): TFile[] {
+		const matches = this.app.vault.getMarkdownFiles().filter((file) =>
+			this.tagsForFile(file).some((candidate) => candidate === tag || candidate.startsWith(tag + "/"))
+		);
+		matches.sort(compareNames);
+		return [
+			...matches.filter((file) => this.plugin.isPinned(file.path)),
+			...matches.filter((file) => !this.plugin.isPinned(file.path)),
+		];
 	}
 
 	private applyColumnWidth(el: HTMLElement, index: number): void {
@@ -288,9 +482,15 @@ class MillerColumnsView extends ItemView {
 		});
 	}
 
-	private renderRow(colEl: HTMLElement, colIndex: number, item: TAbstractFile): void {
+	private renderRow(
+		colEl: HTMLElement,
+		colIndex: number,
+		item: TAbstractFile,
+		onSelect?: () => void
+	): HTMLElement {
 		const row = colEl.createDiv({ cls: "mc-item" });
 		row.dataset.path = item.path;
+		row.setAttr("title", item.path);
 		row.setAttr("draggable", "true");
 
 		const iconEl = row.createSpan({ cls: "mc-icon" });
@@ -308,7 +508,8 @@ class MillerColumnsView extends ItemView {
 
 		row.addEventListener("click", () => {
 			this.columnsEl.focus({ preventScroll: true });
-			this.selectItem(colIndex, item);
+			if (onSelect) onSelect();
+			else this.selectItem(colIndex, item);
 		});
 		row.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
@@ -323,6 +524,7 @@ class MillerColumnsView extends ItemView {
 		if (item instanceof TFolder) {
 			this.addDropHandlers(row, () => item);
 		}
+		return row;
 	}
 
 	private attachColumnHandlers(el: HTMLElement, index: number): void {
@@ -330,19 +532,29 @@ class MillerColumnsView extends ItemView {
 			if ((e.target as HTMLElement).closest(".mc-item")) return;
 			e.preventDefault();
 			const col = this.columns[index];
-			if (col) this.showFolderMenu(e, col.folder);
+			if (col?.source.kind === "folder") this.showFolderMenu(e, col.source.folder);
 		});
-		this.addDropHandlers(el, () => this.columns[index]?.folder ?? null);
+		this.addDropHandlers(el, () => {
+			const source = this.columns[index]?.source;
+			return source?.kind === "folder" ? source.folder : null;
+		});
 	}
 
 	private updateSelectionClasses(): void {
-		const tipIndex = this.selection.length - 1;
 		this.columns.forEach((col, i) => {
-			const selPath = this.selection[i] ? this.selection[i].path : null;
 			col.el.querySelectorAll<HTMLElement>(".mc-item").forEach((row) => {
-				const selected = selPath !== null && row.dataset.path === selPath;
+				let selected = false;
+				if (row.dataset.shortcut !== "true") {
+					if (row.dataset.tag) {
+						selected = this.activeTag === row.dataset.tag;
+					} else if (col.source.kind === "tag") {
+						selected = this.tagSelection?.path === row.dataset.path;
+					} else {
+						selected = this.selection[i]?.path === row.dataset.path;
+					}
+				}
 				row.classList.toggle("is-selected", selected);
-				row.classList.toggle("is-active", selected && i === tipIndex);
+				row.classList.toggle("is-active", selected && i === this.activeColumn);
 			});
 		});
 	}
@@ -368,6 +580,8 @@ class MillerColumnsView extends ItemView {
 	// -------------------------------------------------------------- selection
 
 	private selectItem(colIndex: number, item: TAbstractFile, openFile = true): void {
+		this.activeTag = null;
+		this.tagSelection = null;
 		this.selection = this.selection.slice(0, colIndex);
 		this.selection[colIndex] = item;
 		this.activeColumn = colIndex;
@@ -382,6 +596,8 @@ class MillerColumnsView extends ItemView {
 
 	/** Select the full ancestor chain of `item` and rebuild all columns around it. */
 	private revealPath(item: TAbstractFile): void {
+		this.activeTag = null;
+		this.tagSelection = null;
 		const chain: TAbstractFile[] = [];
 		let cur: TAbstractFile | null = item;
 		while (cur && cur.parent) {
@@ -394,6 +610,28 @@ class MillerColumnsView extends ItemView {
 		if (chain.length > 0) this.scrollRowIntoView(chain.length - 1, item.path);
 	}
 
+	private openShortcut(item: TAbstractFile): void {
+		this.revealPath(item);
+		if (item instanceof TFile) void this.openPageFile(item);
+		else if (item instanceof TFolder) void this.openFolderPage(item);
+	}
+
+	private selectTag(tag: string): void {
+		this.selection = [];
+		this.activeTag = tag;
+		this.tagSelection = null;
+		this.activeColumn = 1;
+		this.buildColumnsFrom(0);
+	}
+
+	private selectTagResult(file: TFile, openFile = true): void {
+		this.tagSelection = file;
+		this.activeColumn = 1;
+		this.updateSelectionClasses();
+		this.scrollRowIntoView(1, file.path);
+		if (openFile) void this.openPageFile(file);
+	}
+
 	// --------------------------------------------------------------- keyboard
 
 	private onKeyDown(e: KeyboardEvent): void {
@@ -401,20 +639,23 @@ class MillerColumnsView extends ItemView {
 		const col = Math.min(this.activeColumn, this.columns.length - 1);
 		this.activeColumn = col;
 		const items = this.itemsForColumn(col);
-		const current = this.selection[col];
+		const isTagColumn = this.columns[col]?.source.kind === "tag";
+		const current = isTagColumn ? this.tagSelection : this.selection[col];
 		const idx = current ? items.indexOf(current) : -1;
 
 		switch (e.key) {
 			case "ArrowDown": {
 				if (items.length === 0) break;
 				const next = items[Math.min(items.length - 1, idx + 1)];
-				this.selectItem(col, next, false);
+				if (isTagColumn && next instanceof TFile) this.selectTagResult(next, false);
+				else this.selectItem(col, next, false);
 				break;
 			}
 			case "ArrowUp": {
 				if (items.length === 0) break;
 				const next = items[idx === -1 ? items.length - 1 : Math.max(0, idx - 1)];
-				this.selectItem(col, next, false);
+				if (isTagColumn && next instanceof TFile) this.selectTagResult(next, false);
+				else this.selectItem(col, next, false);
 				break;
 			}
 			case "ArrowLeft": {
@@ -426,7 +667,7 @@ class MillerColumnsView extends ItemView {
 				break;
 			}
 			case "Enter": {
-				const sel = this.selection[col];
+				const sel = isTagColumn ? this.tagSelection : this.selection[col];
 				if (sel instanceof TFile) {
 					void this.openPageFile(sel);
 				} else if (sel instanceof TFolder) {
@@ -480,6 +721,12 @@ class MillerColumnsView extends ItemView {
 			valid++;
 		}
 		if (valid < this.selection.length) this.selection.length = valid;
+		if (
+			this.tagSelection &&
+			this.app.vault.getAbstractFileByPath(this.tagSelection.path) !== this.tagSelection
+		) {
+			this.tagSelection = null;
+		}
 		this.activeColumn = Math.min(this.activeColumn, this.columnCount() - 1);
 
 		// Drop columns the (possibly pruned) selection no longer supports.
@@ -487,9 +734,13 @@ class MillerColumnsView extends ItemView {
 
 		const all = affected.has(REFRESH_ALL);
 		this.columns.forEach((col, i) => {
-			if (all || affected.has(col.folder.path)) {
+			if (
+				all ||
+				col.source.kind === "tag" ||
+				(col.source.kind === "folder" && affected.has(col.source.folder.path))
+			) {
 				this.renderColumn(i);
-				void this.syncFolderPage(col.folder);
+				if (col.source.kind === "folder") void this.syncFolderPage(col.source.folder);
 			}
 		});
 		this.updateSelectionClasses();
@@ -617,6 +868,23 @@ class MillerColumnsView extends ItemView {
 		menu.addSeparator();
 		menu.addItem((mi) =>
 			mi
+				.setTitle(this.plugin.isPinned(item.path) ? "Unpin" : "Pin")
+				.setIcon("pin")
+				.onClick(() => void this.plugin.togglePinned(item.path))
+		);
+		menu.addItem((mi) =>
+			mi
+				.setTitle(
+					this.plugin.hasShortcut("path", item.path)
+						? "Remove shortcut"
+						: "Add shortcut"
+				)
+				.setIcon("star")
+				.onClick(() => void this.plugin.toggleShortcut("path", item.path))
+		);
+		menu.addSeparator();
+		menu.addItem((mi) =>
+			mi
 				.setTitle("Rename")
 				.setIcon("pencil")
 				.onClick(() => new RenameModal(this.app, this.plugin, item).open())
@@ -630,6 +898,19 @@ class MillerColumnsView extends ItemView {
 					new Notice("Could not delete: " + errorMessage(err));
 				}
 			})
+		);
+		menu.showAtMouseEvent(e);
+	}
+
+	private showTagMenu(e: MouseEvent, tag: string): void {
+		const menu = new Menu();
+		menu.addItem((mi) =>
+			mi
+				.setTitle(
+					this.plugin.hasShortcut("tag", tag) ? "Remove shortcut" : "Add shortcut"
+				)
+				.setIcon("star")
+				.onClick(() => void this.plugin.toggleShortcut("tag", tag))
 		);
 		menu.showAtMouseEvent(e);
 	}
@@ -972,11 +1253,24 @@ export default class MillerColumnsPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		const loaded = (await this.loadData()) as Partial<MillerColumnsSettings> | null;
+		const shortcuts = Array.isArray(loaded?.shortcuts)
+			? loaded.shortcuts.filter(
+					(shortcut): shortcut is NavigationShortcut =>
+						Boolean(shortcut) &&
+						(shortcut.type === "path" || shortcut.type === "tag") &&
+						typeof shortcut.value === "string" &&
+						shortcut.value.length > 0
+				)
+			: [];
 		this.settings = {
 			...DEFAULT_SETTINGS,
 			...loaded,
 			columnWidths: Array.isArray(loaded?.columnWidths) ? loaded.columnWidths : [],
 			appearances: loaded?.appearances && typeof loaded.appearances === "object" ? loaded.appearances : {},
+			pinnedPaths: Array.isArray(loaded?.pinnedPaths)
+				? Array.from(new Set(loaded.pinnedPaths.filter((path) => typeof path === "string")))
+				: [],
+			shortcuts,
 		};
 		this.settings.columnWidth = this.clampColumnWidth(this.settings.columnWidth);
 		this.settings.columnWidths = this.settings.columnWidths.map((width) =>
@@ -988,7 +1282,10 @@ export default class MillerColumnsPlugin extends Plugin {
 		await this.saveData(this.settings);
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_MILLER)) {
 			const view = leaf.view;
-			if (view instanceof MillerColumnsView) view.applySettings();
+			if (view instanceof MillerColumnsView) {
+				view.applySettings();
+				view.refreshNavigation();
+			}
 		}
 	}
 
@@ -1015,21 +1312,69 @@ export default class MillerColumnsPlugin extends Plugin {
 		this.settings.appearances[path] = appearance;
 	}
 
+	isPinned(path: string): boolean {
+		return this.settings.pinnedPaths.includes(path);
+	}
+
+	async togglePinned(path: string): Promise<void> {
+		if (this.isPinned(path)) {
+			this.settings.pinnedPaths = this.settings.pinnedPaths.filter((candidate) => candidate !== path);
+		} else {
+			this.settings.pinnedPaths.push(path);
+		}
+		await this.saveSettings();
+	}
+
+	hasShortcut(type: NavigationShortcut["type"], value: string): boolean {
+		return this.settings.shortcuts.some(
+			(shortcut) => shortcut.type === type && shortcut.value === value
+		);
+	}
+
+	async toggleShortcut(type: NavigationShortcut["type"], value: string): Promise<void> {
+		if (this.hasShortcut(type, value)) {
+			this.settings.shortcuts = this.settings.shortcuts.filter(
+				(shortcut) => shortcut.type !== type || shortcut.value !== value
+			);
+		} else {
+			this.settings.shortcuts.push({ type, value });
+		}
+		await this.saveSettings();
+	}
+
 	async moveAppearance(oldPath: string, newPath: string): Promise<void> {
 		let changed = false;
+		const movePath = (path: string): string => {
+			if (path === oldPath) return newPath;
+			if (path.startsWith(oldPath + "/")) return newPath + path.substring(oldPath.length);
+			return path;
+		};
 		const next: Record<string, PageAppearance> = {};
 		for (const [path, appearance] of Object.entries(this.settings.appearances)) {
-			let targetPath = path;
-			if (path === oldPath) {
-				targetPath = newPath;
-			} else if (path.startsWith(oldPath + "/")) {
-				targetPath = newPath + path.substring(oldPath.length);
-			}
+			const targetPath = movePath(path);
 			if (targetPath !== path) changed = true;
 			next[targetPath] = appearance;
 		}
+		const pinnedPaths = this.settings.pinnedPaths.map((path) => {
+			const targetPath = movePath(path);
+			if (targetPath !== path) changed = true;
+			return targetPath;
+		});
+		const shortcuts = this.settings.shortcuts.map((shortcut) => {
+			if (shortcut.type !== "path") return shortcut;
+			const targetPath = movePath(shortcut.value);
+			if (targetPath !== shortcut.value) changed = true;
+			return { ...shortcut, value: targetPath };
+		});
 		if (!changed) return;
 		this.settings.appearances = next;
+		this.settings.pinnedPaths = Array.from(new Set(pinnedPaths));
+		this.settings.shortcuts = shortcuts.filter(
+			(shortcut, index, all) =>
+				all.findIndex(
+					(candidate) => candidate.type === shortcut.type && candidate.value === shortcut.value
+				) === index
+		);
 		await this.saveSettings();
 	}
 
